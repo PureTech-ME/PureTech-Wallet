@@ -90,6 +90,14 @@ input[type=number] {
   }
   .tab-content {
     display: block !important;
+    margin-bottom: 1.5rem !important;
+  }
+  .max-h-\[460px\], .max-h-\[360px\], .max-h-\[300px\] {
+    max-height: none !important;
+    overflow: visible !important;
+  }
+  #incomesPagination, #obligationsPagination, #assetsPagination, #creatorTxPagination, #freelanceTxPagination {
+    display: none !important;
   }
   .print-page-break {
     page-break-before: always;

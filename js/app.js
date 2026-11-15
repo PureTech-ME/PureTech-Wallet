@@ -6,6 +6,24 @@ let appState = getDefaultCleanState();
 let wealthChart = null;
 let pillarsChart = null;
 let trendsChart = null;
+let isPrintMode = false;
+
+// حساب سعر جرام الذهب حسب العيار بدقة عالية للعملات ذات القيمة العالية (أقل من 1000) وتقريب صحيح للعملات الأخرى
+// ترتيب المعاملات تلقائياً حسب التاريخ من الأحدث للأقدم
+function sortByDateDesc(list) {
+  if (!Array.isArray(list)) return [];
+  return [...list].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+}
+
+function getCalculatedGoldRate(karat = "24k") {
+  const base24k = Number(appState?.rates?.gold || 0);
+  const factor = karat === "21k" ? (21 / 24) : (karat === "18k" ? (18 / 24) : 1);
+  const rawPrice = base24k * factor;
+  const curr = appState?.settings?.currency || "USD";
+  return (curr === "USD" || curr === "EUR" || base24k < 1000)
+    ? Number(rawPrice.toFixed(2))
+    : Math.round(rawPrice);
+}
 
 // Helper for trilingual runtime texts (Arabic, English, Spanish)
 function tr(arText, enText, esText) {
@@ -28,7 +46,12 @@ function showToast(message, type = "success") {
       : "bg-dark-900 border-indigo-500/40 text-indigo-300"
   }`;
   const icon = type === "success" ? "fa-circle-check" : type === "error" ? "fa-circle-xmark" : "fa-circle-info";
-  toast.innerHTML = `<i class="fa-solid ${icon} text-sm"></i><span>${message}</span>`;
+  const iconEl = document.createElement("i");
+  iconEl.className = `fa-solid ${icon} text-sm`;
+  const spanEl = document.createElement("span");
+  spanEl.textContent = String(message ?? "");
+  toast.appendChild(iconEl);
+  toast.appendChild(spanEl);
   container.appendChild(toast);
   setTimeout(() => {
     toast.style.opacity = "0";
@@ -198,38 +221,64 @@ function calculateFinancials() {
   const selectedPeriod = paginationState.selectedPeriod;
   const isPeriodFiltered = selectedPeriod && selectedPeriod !== "all";
 
-  const periodIncomes = isPeriodFiltered
+  const periodIncomes = sortByDateDesc(isPeriodFiltered
     ? appState.personalIncomes.filter(inc => (inc.date || "").startsWith(selectedPeriod))
-    : appState.personalIncomes;
-  const periodObligations = isPeriodFiltered
+    : appState.personalIncomes);
+  const periodObligations = sortByDateDesc(isPeriodFiltered
     ? appState.personalObligations.filter(exp => (exp.date || "").startsWith(selectedPeriod))
-    : appState.personalObligations;
+    : appState.personalObligations);
 
   const personalIncome = periodIncomes.reduce((acc, item) => acc + Number(item.amount || 0), 0);
   const personalObligations = periodObligations.reduce((acc, item) => acc + Number(item.amount || 0), 0);
   const personalNet = personalIncome - personalObligations;
 
+  let allTimeCreatorRev = 0;
+  let allTimeCreatorExp = 0;
+  appState.creatorTransactions.forEach((tx) => {
+    if (tx.flow === "revenue") allTimeCreatorRev += Number(tx.amount || 0);
+    else allTimeCreatorExp += Number(tx.amount || 0);
+  });
+  const allTimeCreatorNet = allTimeCreatorRev - allTimeCreatorExp;
+
+  const periodCreatorTx = isPeriodFiltered
+    ? appState.creatorTransactions.filter(tx => (tx.date || "").startsWith(selectedPeriod))
+    : appState.creatorTransactions;
   let creatorRev = 0;
   let creatorExp = 0;
-  appState.creatorTransactions.forEach((tx) => {
+  periodCreatorTx.forEach((tx) => {
     if (tx.flow === "revenue") creatorRev += Number(tx.amount || 0);
     else creatorExp += Number(tx.amount || 0);
   });
   const creatorNet = creatorRev - creatorExp;
 
+  let allTimeFreelanceRev = 0;
+  let allTimeFreelanceExp = 0;
+  appState.freelanceTransactions.forEach((tx) => {
+    if (tx.flow === "income") allTimeFreelanceRev += Number(tx.amount || 0);
+    else allTimeFreelanceExp += Number(tx.amount || 0);
+  });
+  const allTimeFreelanceNet = allTimeFreelanceRev - allTimeFreelanceExp;
+
+  const periodFreelanceTx = isPeriodFiltered
+    ? appState.freelanceTransactions.filter(tx => (tx.date || "").startsWith(selectedPeriod))
+    : appState.freelanceTransactions;
   let freelanceRev = 0;
   let freelanceExp = 0;
-  appState.freelanceTransactions.forEach((tx) => {
+  periodFreelanceTx.forEach((tx) => {
     if (tx.flow === "income") freelanceRev += Number(tx.amount || 0);
     else freelanceExp += Number(tx.amount || 0);
   });
   const freelanceNet = freelanceRev - freelanceExp;
 
+  const allTimeOnlineNet = allTimeCreatorNet + allTimeFreelanceNet;
   const onlineNet = creatorNet + freelanceNet;
 
   const liquidCash = appState.settings.includeOnline 
-    ? allTimePersonalNet + onlineNet 
+    ? allTimePersonalNet + allTimeOnlineNet 
     : allTimePersonalNet;
+  const periodLiquidCash = appState.settings.includeOnline
+    ? personalNet + onlineNet
+    : personalNet;
 
   let totalAssetsValue = 0;
   let totalAssetsCost = 0;
@@ -247,16 +296,12 @@ function calculateFinancials() {
     if (asset.category === "usd") currentUnitPrice = Number(appState.rates.usd);
     if (asset.category === "eur") currentUnitPrice = Number(appState.rates.eur);
     if (asset.category === "gold") {
-      const base24k = Number(appState.rates.gold);
-      const karat = asset.karat || "24k";
-      const factor = karat === "21k" ? (21 / 24) : (karat === "18k" ? (18 / 24) : 1);
-      const rawPrice = base24k * factor;
-      currentUnitPrice = base24k < 1000 ? Number(rawPrice.toFixed(2)) : Math.round(rawPrice);
+      currentUnitPrice = getCalculatedGoldRate(asset.karat || "24k");
     }
 
     const qty = Number(asset.quantity || 0);
     const val = qty * currentUnitPrice;
-    const purchasePrice = Number(asset.purchasePrice || asset.unitPrice || currentUnitPrice);
+    const purchasePrice = (asset.purchasePrice !== undefined && asset.purchasePrice !== null && asset.purchasePrice !== '') ? Number(asset.purchasePrice) : ((asset.unitPrice !== undefined && asset.unitPrice !== null && asset.unitPrice !== '') ? Number(asset.unitPrice) : currentUnitPrice);
     totalAssetsCost += (qty * purchasePrice);
 
     totalAssetsValue += val;
@@ -282,7 +327,8 @@ function calculateFinancials() {
     ? (allTimePersonalObligations / distinctObligationMonths) 
     : personalObligations;
   const monthlyBurn = personalObligations > 0 ? personalObligations : avgMonthlyBurn;
-  const runwayMonths = monthlyBurn > 0 ? (liquidCash / monthlyBurn) : 999;
+  const rawRunway = monthlyBurn > 0 ? (liquidCash / monthlyBurn) : (liquidCash >= 0 ? 999 : -1);
+  const runwayMonths = rawRunway < 0 ? -1 : rawRunway;
 
   return {
     personalIncome,
@@ -291,6 +337,13 @@ function calculateFinancials() {
     allTimePersonalIncome,
     allTimePersonalObligations,
     allTimePersonalNet,
+    allTimeCreatorRev,
+    allTimeCreatorExp,
+    allTimeCreatorNet,
+    allTimeFreelanceRev,
+    allTimeFreelanceExp,
+    allTimeFreelanceNet,
+    allTimeOnlineNet,
     creatorRev,
     creatorExp,
     creatorNet,
@@ -299,6 +352,7 @@ function calculateFinancials() {
     freelanceNet,
     onlineNet,
     liquidCash,
+    periodLiquidCash,
     totalAssetsValue,
     totalAssetsCost,
     assetValues,
@@ -327,6 +381,9 @@ function updateOnlineStatusUI() {
 // Backup Reminder Counter
 let userOperationsCounter = 0;
 function trackOperationAndRemind() {
+  if (appState && appState.isDemoMode) {
+    appState.isDemoMode = false;
+  }
   userOperationsCounter++;
   if (userOperationsCounter >= 8) {
     const lang = appState?.settings?.lang || "ar";
@@ -388,9 +445,18 @@ function updateLanguageUI() {
   if (baseCurrLabel) baseCurrLabel.textContent = appState.settings.currency;
 
   const baseOpt1 = document.getElementById("txCurrencyBaseOpt");
-  if (baseOpt1) baseOpt1.textContent = `${appState.settings.currency} (${lang === 'ar' ? 'الأساسية' : 'Base'})`;
+  if (baseOpt1) baseOpt1.textContent = `${appState.settings.currency} (${tr('الأساسية', 'Base', 'Base')})`;
   const baseOpt2 = document.getElementById("flCurrencyBaseOpt");
-  if (baseOpt2) baseOpt2.textContent = `${appState.settings.currency} (${lang === 'ar' ? 'الأساسية' : 'Base'})`;
+  if (baseOpt2) baseOpt2.textContent = `${appState.settings.currency} (${tr('الأساسية', 'Base', 'Base')})`;
+  const baseOpt3 = document.getElementById("creatorCurrencyBaseOpt");
+  if (baseOpt3) baseOpt3.textContent = `${appState.settings.currency} (${tr('الأساسية', 'Base', 'Base')})`;
+
+  const pinInp = document.getElementById("inputSettingsPin");
+  if (pinInp) {
+    pinInp.placeholder = appState?.settings?.pinEnabled
+      ? (dict.pin_protected_placeholder || tr("•••• (محمي)", "•••• (Protected)", "•••• (Protegido)"))
+      : "••••";
+  }
 
   updatePrivacyUI();
   updateOnlineStatusUI();
@@ -427,7 +493,7 @@ function renderAll() {
   document.getElementById("kpiNetWorth").textContent = formatMoney(data.totalNetWorth);
   document.getElementById("kpiLiquidity").textContent = formatMoney(data.liquidCash);
   document.getElementById("kpiAssetsValue").textContent = formatMoney(data.totalAssetsValue);
-  document.getElementById("kpiOnlineEarnings").textContent = formatMoney(data.onlineNet);
+  document.getElementById("kpiOnlineEarnings").textContent = formatMoney(data.allTimeOnlineNet);
 
   // Financial Health Intelligence Indicators
   const dict = i18n[lang] || i18n.en;
@@ -450,7 +516,11 @@ function renderAll() {
   const runwayEl = document.getElementById("kpiEmergencyRunway");
   const runwayBadgeEl = document.getElementById("kpiRunwayBadge");
   if (runwayEl && runwayBadgeEl) {
-    if (data.runwayMonths >= 999) {
+    if (data.runwayMonths < 0) {
+      runwayEl.textContent = dict.runway_deficit || "0 Months (Deficit)";
+      runwayBadgeEl.className = "px-2.5 py-1 rounded-md text-[11px] font-bold bg-rose-500/20 text-rose-300 border border-rose-500/30";
+      runwayBadgeEl.textContent = dict.badge_runway_low || "Critical (<3 mo)";
+    } else if (data.runwayMonths >= 999) {
       runwayEl.textContent = dict.runway_infinite || "Highly Secure";
       runwayBadgeEl.className = "px-2.5 py-1 rounded-md text-[11px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30";
       runwayBadgeEl.textContent = dict.badge_runway_high || "Safe (>6 mo)";
@@ -478,7 +548,9 @@ function renderAll() {
     const rawMonths = new Set();
     appState.personalIncomes.forEach(i => { if (i.date) rawMonths.add(i.date.substring(0, 7)); });
     appState.personalObligations.forEach(o => { if (o.date) rawMonths.add(o.date.substring(0, 7)); });
-    const currentYearMonth = new Date().toISOString().substring(0, 7);
+    appState.creatorTransactions.forEach(t => { if (t.date) rawMonths.add(t.date.substring(0, 7)); });
+    appState.freelanceTransactions.forEach(t => { if (t.date) rawMonths.add(t.date.substring(0, 7)); });
+    const currentYearMonth = getLocalTodayStr().substring(0, 7);
     rawMonths.add(currentYearMonth);
 
     const sortedMonths = Array.from(rawMonths).sort().reverse();
@@ -542,9 +614,9 @@ function renderAll() {
   const selectedPeriod = paginationState.selectedPeriod;
   const isPeriodFiltered = selectedPeriod && selectedPeriod !== "all";
 
-  const periodIncomes = isPeriodFiltered
+  const periodIncomes = sortByDateDesc(isPeriodFiltered
     ? appState.personalIncomes.filter(inc => (inc.date || "").startsWith(selectedPeriod))
-    : appState.personalIncomes;
+    : appState.personalIncomes);
 
   const incQuery = (document.getElementById("searchIncomesInput")?.value || "").trim().toLowerCase();
   const visibleIncomes = incQuery
@@ -559,7 +631,7 @@ function renderAll() {
     : periodIncomes;
 
   // Pagination for Incomes
-  const incPageSize = paginationState.pageSize;
+  const incPageSize = isPrintMode ? Math.max(1, visibleIncomes.length) : paginationState.pageSize;
   const incTotal = visibleIncomes.length;
   const incTotalPages = Math.max(1, Math.ceil(incTotal / incPageSize));
   if (paginationState.incomesPage > incTotalPages) paginationState.incomesPage = incTotalPages;
@@ -585,7 +657,7 @@ function renderAll() {
             <div>
               <h5 class="text-xs font-bold text-white">${escapeHtml(inc.title)}</h5>
               <div class="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                <span class="bg-dark-950 px-1.5 py-0.5 rounded border border-slate-800">${catLabel}</span>
+                <span class="bg-dark-950 px-1.5 py-0.5 rounded border border-slate-800">${escapeHtml(catLabel)}</span>
                 <span>${inc.date}</span>
               </div>
             </div>
@@ -595,10 +667,10 @@ function renderAll() {
               <span class="text-xs font-mono font-bold text-emerald-400">+${formatMoney(inc.amount)}</span>
               ${(inc.currency && inc.currency !== appState.settings.currency && inc.foreignAmount) ? `<span class="text-[10px] font-mono text-slate-400 block font-normal">(${inc.foreignAmount.toLocaleString('en-US')} ${inc.currency})</span>` : ''}
             </div>
-            <button onclick="openEditPersonalTxModal('income', '${inc.id}')" aria-label="${lang === 'ar' ? 'تعديل الدخل' : 'Edit income'}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="Edit">
+            <button onclick="openEditPersonalTxModal('income', '${inc.id}')" aria-label="${tr('تعديل الدخل', 'Edit income', 'Editar ingreso')}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="${tr('تعديل الدخل', 'Edit income', 'Editar ingreso')}">
               <i class="fa-solid fa-pen-to-square text-xs"></i>
             </button>
-            <button onclick="deletePersonalIncome('${inc.id}')" aria-label="${lang === 'ar' ? 'حذف الدخل' : 'Delete income'}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="Delete">
+            <button onclick="deletePersonalIncome('${inc.id}')" aria-label="${tr('حذف الدخل', 'Delete income', 'Eliminar ingreso')}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="${tr('حذف الدخل', 'Delete income', 'Eliminar ingreso')}">
               <i class="fa-solid fa-trash-can text-xs"></i>
             </button>
           </div>
@@ -608,9 +680,9 @@ function renderAll() {
   }
   renderPagination("incomesPagination", "incomes", paginationState.incomesPage, incTotal, incPageSize);
 
-  const periodObligations = isPeriodFiltered
+  const periodObligations = sortByDateDesc(isPeriodFiltered
     ? appState.personalObligations.filter(exp => (exp.date || "").startsWith(selectedPeriod))
-    : appState.personalObligations;
+    : appState.personalObligations);
 
   const expQuery = (document.getElementById("searchObligationsInput")?.value || "").trim().toLowerCase();
   const visibleObligations = expQuery
@@ -625,7 +697,7 @@ function renderAll() {
     : periodObligations;
 
   // Pagination for Obligations
-  const expPageSize = paginationState.pageSize;
+  const expPageSize = isPrintMode ? Math.max(1, visibleObligations.length) : paginationState.pageSize;
   const expTotal = visibleObligations.length;
   const expTotalPages = Math.max(1, Math.ceil(expTotal / expPageSize));
   if (paginationState.obligationsPage > expTotalPages) paginationState.obligationsPage = expTotalPages;
@@ -651,7 +723,7 @@ function renderAll() {
             <div>
               <h5 class="text-xs font-bold text-white">${escapeHtml(exp.title)}</h5>
               <div class="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
-                <span class="bg-dark-950 px-1.5 py-0.5 rounded border border-slate-800">${catLabel}</span>
+                <span class="bg-dark-950 px-1.5 py-0.5 rounded border border-slate-800">${escapeHtml(catLabel)}</span>
                 <span>${exp.date}</span>
               </div>
             </div>
@@ -661,10 +733,10 @@ function renderAll() {
               <span class="text-xs font-mono font-bold text-rose-400">-${formatMoney(exp.amount)}</span>
               ${(exp.currency && exp.currency !== appState.settings.currency && exp.foreignAmount) ? `<span class="text-[10px] font-mono text-slate-400 block font-normal">(${exp.foreignAmount.toLocaleString('en-US')} ${exp.currency})</span>` : ''}
             </div>
-            <button onclick="openEditPersonalTxModal('expense', '${exp.id}')" aria-label="${lang === 'ar' ? 'تعديل الالتزام' : 'Edit obligation'}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="Edit">
+            <button onclick="openEditPersonalTxModal('expense', '${exp.id}')" aria-label="${tr('تعديل الالتزام', 'Edit obligation', 'Editar obligación')}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="${tr('تعديل الالتزام', 'Edit obligation', 'Editar obligación')}">
               <i class="fa-solid fa-pen-to-square text-xs"></i>
             </button>
-            <button onclick="deletePersonalObligation('${exp.id}')" aria-label="${lang === 'ar' ? 'حذف الالتزام' : 'Delete obligation'}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="Delete">
+            <button onclick="deletePersonalObligation('${exp.id}')" aria-label="${tr('حذف الالتزام', 'Delete obligation', 'Eliminar obligación')}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="${tr('حذف الالتزام', 'Delete obligation', 'Eliminar obligación')}">
               <i class="fa-solid fa-trash-can text-xs"></i>
             </button>
           </div>
@@ -674,16 +746,55 @@ function renderAll() {
   }
   renderPagination("obligationsPagination", "obligations", paginationState.obligationsPage, expTotal, expPageSize);
 
+  // Render Custom Personal Categories Badges
+  const pIncBadgeContainer = document.getElementById("personalIncomeCatsBadges");
+  if (pIncBadgeContainer) {
+    const pIncCats = appState.customPersonalCats?.income || [];
+    pIncBadgeContainer.innerHTML = pIncCats.map((cat, idx) => `
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-xs">
+        <span>${escapeHtml(cat)}</span>
+        <button type="button" data-pcat-idx="${idx}" data-pcat-type="income" aria-label="${tr('حذف التصنيف', 'Remove category', 'Eliminar categoría')}" class="btn-remove-personal-cat hover:text-rose-400 text-[10px]">&times;</button>
+      </span>
+    `).join("");
+  }
+
+  const pExpBadgeContainer = document.getElementById("personalExpenseCatsBadges");
+  if (pExpBadgeContainer) {
+    const pExpCats = appState.customPersonalCats?.expense || [];
+    pExpBadgeContainer.innerHTML = pExpCats.map((cat, idx) => `
+      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/20 text-xs">
+        <span>${escapeHtml(cat)}</span>
+        <button type="button" data-pcat-idx="${idx}" data-pcat-type="expense" aria-label="${tr('حذف التصنيف', 'Remove category', 'Eliminar categoría')}" class="btn-remove-personal-cat hover:text-rose-400 text-[10px]">&times;</button>
+      </span>
+    `).join("");
+  }
+
   const assetsBody = document.getElementById("assetsTableBody");
-  const astPageSize = paginationState.pageSize;
-  const astTotal = appState.assets.length;
+  const astQuery = (document.getElementById("searchAssetsInput")?.value || "").trim().toLowerCase();
+  const visibleAssets = astQuery
+    ? appState.assets.filter(ast => {
+        const catMeta = categoriesMap.asset_categories[ast.category] || { ar: "أصل عام", en: "General", es: "General" };
+        const catLabel = (catMeta[lang] || catMeta.en || "").toLowerCase();
+        return (ast.name || "").toLowerCase().includes(astQuery) ||
+               catLabel.includes(astQuery) ||
+               (ast.karat || "").toLowerCase().includes(astQuery) ||
+               String(ast.quantity).includes(astQuery);
+      })
+    : appState.assets;
+
+  const astPageSize = isPrintMode ? Math.max(1, visibleAssets.length) : paginationState.pageSize;
+  const astTotal = visibleAssets.length;
   const astTotalPages = Math.max(1, Math.ceil(astTotal / astPageSize));
   if (paginationState.assetsPage > astTotalPages) paginationState.assetsPage = astTotalPages;
   const astStart = (paginationState.assetsPage - 1) * astPageSize;
-  const pagedAssets = appState.assets.slice(astStart, astStart + astPageSize);
+  const pagedAssets = visibleAssets.slice(astStart, astStart + astPageSize);
 
-  if (appState.assets.length === 0) {
-    assetsBody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-500 text-xs">${tr('لا توجد أصول مسجلة حالياً', 'No assets registered yet', 'No hay activos registrados aún')}</td></tr>`;
+  if (visibleAssets.length === 0) {
+    assetsBody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-500 text-xs">${
+      appState.assets.length === 0
+        ? tr('لا توجد أصول مسجلة حالياً', 'No assets registered yet', 'No hay activos registrados aún')
+        : tr('لا توجد نتائج مطابقة للبحث', 'No matching results', 'No hay resultados que coincidan')
+    }</td></tr>`;
   } else {
     const isPrivate = Boolean(appState?.settings?.privacyMode);
     assetsBody.innerHTML = pagedAssets.map((ast) => {
@@ -692,11 +803,7 @@ function renderAll() {
       if (ast.category === "usd") { unitPrice = Number(appState.rates.usd); isLockedRate = true; }
       if (ast.category === "eur") { unitPrice = Number(appState.rates.eur); isLockedRate = true; }
       if (ast.category === "gold") {
-        const base24k = Number(appState.rates.gold);
-        const karat = ast.karat || "24k";
-        const factor = karat === "21k" ? (21 / 24) : (karat === "18k" ? (18 / 24) : 1);
-        const rawPrice = base24k * factor;
-        unitPrice = base24k < 1000 ? Number(rawPrice.toFixed(2)) : Math.round(rawPrice);
+        unitPrice = getCalculatedGoldRate(ast.karat || "24k");
         isLockedRate = true;
       }
 
@@ -707,7 +814,7 @@ function renderAll() {
         catLabel += ` (${ast.karat ? ast.karat.toUpperCase() : '24K'})`;
       }
 
-      const purchasePrice = Number(ast.purchasePrice || ast.unitPrice || unitPrice);
+      const purchasePrice = (ast.purchasePrice !== undefined && ast.purchasePrice !== null && ast.purchasePrice !== '') ? Number(ast.purchasePrice) : ((ast.unitPrice !== undefined && ast.unitPrice !== null && ast.unitPrice !== '') ? Number(ast.unitPrice) : unitPrice);
       const totalCost = Number(ast.quantity || 0) * purchasePrice;
       const gainLoss = total - totalCost;
       const roiPct = totalCost > 0 ? ((gainLoss / totalCost) * 100).toFixed(1) : 0;
@@ -719,7 +826,7 @@ function renderAll() {
             <span>${escapeHtml(ast.name)}</span>
           </td>
           <td class="py-3 px-3">
-            <span class="bg-dark-950 text-slate-300 px-2 py-0.5 rounded-full border border-slate-800 text-[11px]">${catLabel}</span>
+            <span class="bg-dark-950 text-slate-300 px-2 py-0.5 rounded-full border border-slate-800 text-[11px]">${escapeHtml(catLabel)}</span>
           </td>
           <td class="py-3 px-3">
             <div class="flex items-center gap-1.5">
@@ -737,7 +844,7 @@ function renderAll() {
             ${isPrivate
               ? `<span class="font-mono text-slate-400 text-xs">••••••</span>`
               : (isLockedRate 
-                  ? `<div class="flex items-center gap-1 text-slate-300 font-mono text-xs"><i class="fa-solid fa-lock text-[10px] text-amber-400" title="Synced with global rate"></i> ${unitPrice.toFixed(2)}</div>` 
+                  ? `<div class="flex items-center gap-1 text-slate-300 font-mono text-xs"><i class="fa-solid fa-lock text-[10px] text-amber-400" title="Synced with global rate"></i> ${(unitPrice > 0 && unitPrice < 1) ? unitPrice.toFixed(3) : unitPrice.toFixed(2)}</div>` 
                   : `<input type="number" step="0.01" min="0" value="${unitPrice}" 
                       onchange="updateAssetPriceInline('${ast.id}', this.value)"
                       aria-label="Asset unit price"
@@ -756,10 +863,10 @@ function renderAll() {
           </td>
           <td class="py-3 px-3 text-end">
             <div class="flex items-center justify-end gap-1">
-              <button onclick="openEditAssetModal('${ast.id}')" aria-label="${lang === 'ar' ? 'تعديل الأصل' : 'Edit asset'}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="${lang === 'ar' ? 'تعديل الأصل' : 'Edit'}">
+              <button onclick="openEditAssetModal('${ast.id}')" aria-label="${tr('تعديل الأصل', 'Edit asset', 'Editar activo')}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="${tr('تعديل الأصل', 'Edit asset', 'Editar activo')}">
                 <i class="fa-solid fa-pen-to-square text-xs"></i>
               </button>
-              <button onclick="deleteAsset('${ast.id}')" aria-label="${lang === 'ar' ? 'حذف الأصل' : 'Delete asset'}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="Delete">
+              <button onclick="deleteAsset('${ast.id}')" aria-label="${tr('حذف الأصل', 'Delete asset', 'Eliminar activo')}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="${tr('حذف الأصل', 'Delete asset', 'Eliminar activo')}">
                 <i class="fa-solid fa-trash-can text-xs"></i>
               </button>
             </div>
@@ -787,7 +894,11 @@ function renderAll() {
       let cExp = 0;
       const expCatBreakdown = {};
 
-      appState.creatorTransactions.filter(t => t.channelId === chn.id).forEach(t => {
+      const periodChannelTx = isPeriodFiltered
+        ? appState.creatorTransactions.filter(t => t.channelId === chn.id && (t.date || "").startsWith(selectedPeriod))
+        : appState.creatorTransactions.filter(t => t.channelId === chn.id);
+
+      periodChannelTx.forEach(t => {
         if (t.flow === "revenue") cRev += Number(t.amount || 0);
         else {
           cExp += Number(t.amount || 0);
@@ -798,7 +909,7 @@ function renderAll() {
 
       const breakdownHtml = Object.keys(expCatBreakdown).map(catKey => {
         const label = categoriesMap.creator_expense[catKey]?.[lang] || catKey;
-        return `<span class="bg-dark-950 px-1.5 py-0.5 rounded text-[10px] text-slate-400 border border-slate-800">${label}: ${formatMoney(expCatBreakdown[catKey])}</span>`;
+        return `<span class="bg-dark-950 px-1.5 py-0.5 rounded text-[10px] text-slate-400 border border-slate-800">${escapeHtml(label)}: ${formatMoney(expCatBreakdown[catKey])}</span>`;
       }).join(" ");
 
       return `
@@ -814,10 +925,10 @@ function renderAll() {
               </div>
             </div>
             <div class="flex items-center gap-1">
-              <button onclick="openEditChannelModal('${chn.id}')" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="${lang === 'ar' ? 'تعديل بيانات القناة' : 'Edit Channel'}">
+              <button onclick="openEditChannelModal('${chn.id}')" aria-label="${tr('تعديل بيانات القناة', 'Edit Channel', 'Editar canal')}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="${tr('تعديل بيانات القناة', 'Edit Channel', 'Editar canal')}">
                 <i class="fa-solid fa-pen-to-square text-xs"></i>
               </button>
-              <button onclick="deleteChannel('${chn.id}')" class="text-slate-600 hover:text-rose-400 transition-colors text-xs p-1" title="Delete Channel">
+              <button onclick="deleteChannel('${chn.id}')" aria-label="${tr('حذف القناة', 'Delete Channel', 'Eliminar canal')}" class="text-slate-600 hover:text-rose-400 transition-colors text-xs p-1" title="${tr('حذف القناة', 'Delete Channel', 'Eliminar canal')}">
                 <i class="fa-solid fa-trash-can"></i>
               </button>
             </div>
@@ -825,22 +936,22 @@ function renderAll() {
 
           <div class="grid grid-cols-3 gap-2 text-center bg-dark-950 p-2 rounded-lg border border-slate-850">
             <div>
-              <span class="text-[10px] text-slate-400 block">${lang === 'ar' ? 'الإيرادات' : 'Revenue'}</span>
+              <span class="text-[10px] text-slate-400 block">${tr('الإيرادات', 'Revenue', 'Ingresos')}</span>
               <span class="text-xs font-mono font-bold text-emerald-400">+${formatMoney(cRev)}</span>
             </div>
             <div>
-              <span class="text-[10px] text-slate-400 block">${lang === 'ar' ? 'التكاليف' : 'Costs'}</span>
+              <span class="text-[10px] text-slate-400 block">${tr('التكاليف', 'Costs', 'Costos')}</span>
               <span class="text-xs font-mono font-bold text-rose-400">-${formatMoney(cExp)}</span>
             </div>
             <div>
-              <span class="text-[10px] text-slate-400 block">${lang === 'ar' ? 'الصافي' : 'Net'}</span>
+              <span class="text-[10px] text-slate-400 block">${tr('الصافي', 'Net', 'Neto')}</span>
               <span class="text-xs font-mono font-bold ${cNet >= 0 ? 'text-brand-300' : 'text-rose-400'}">${formatMoney(cNet)}</span>
             </div>
           </div>
 
           ${breakdownHtml ? `
             <div class="pt-1">
-              <span class="text-[10px] text-slate-500 block mb-1 font-semibold">${lang === 'ar' ? 'تفاصيل الإنتاج:' : 'Production breakdown:'}</span>
+              <span class="text-[10px] text-slate-500 block mb-1 font-semibold">${tr('تفاصيل الإنتاج:', 'Production breakdown:', 'Desglose de producción:')}</span>
               <div class="flex flex-wrap gap-1">${breakdownHtml}</div>
             </div>
           ` : ''}
@@ -860,11 +971,29 @@ function renderAll() {
   filterSelect.value = currentFilter;
 
   const creatorTxList = document.getElementById("creatorTxList");
-  const filteredCreatorTx = currentFilter === "all" 
-    ? appState.creatorTransactions 
-    : appState.creatorTransactions.filter(t => t.channelId === currentFilter);
+  const periodCreatorTxAll = isPeriodFiltered
+    ? appState.creatorTransactions.filter(t => (t.date || "").startsWith(selectedPeriod))
+    : appState.creatorTransactions;
+  const crtQuery = (document.getElementById("searchCreatorTxInput")?.value || "").trim().toLowerCase();
+  const baseCreatorTx = currentFilter === "all"
+    ? periodCreatorTxAll
+    : periodCreatorTxAll.filter(t => t.channelId === currentFilter);
+  const filteredCreatorTx = sortByDateDesc(crtQuery
+    ? baseCreatorTx.filter(tx => {
+        const chn = appState.channels.find(c => c.id === tx.channelId);
+        const chnName = (chn ? chn.name : "").toLowerCase();
+        const isRev = tx.flow === "revenue";
+        const catLabel = (isRev
+          ? (categoriesMap.creator_revenue[tx.category]?.[lang] || tx.category)
+          : (categoriesMap.creator_expense[tx.category]?.[lang] || tx.category)).toLowerCase();
+        return (tx.title || "").toLowerCase().includes(crtQuery) ||
+               chnName.includes(crtQuery) ||
+               catLabel.includes(crtQuery) ||
+               String(tx.amount).includes(crtQuery);
+      })
+    : baseCreatorTx);
 
-  const crtPageSize = paginationState.pageSize;
+  const crtPageSize = isPrintMode ? Math.max(1, filteredCreatorTx.length) : paginationState.pageSize;
   const crtTotal = filteredCreatorTx.length;
   const crtTotalPages = Math.max(1, Math.ceil(crtTotal / crtPageSize));
   if (paginationState.creatorTxPage > crtTotalPages) paginationState.creatorTxPage = crtTotalPages;
@@ -872,7 +1001,11 @@ function renderAll() {
   const pagedCreatorTx = filteredCreatorTx.slice(crtStart, crtStart + crtPageSize);
 
   if (filteredCreatorTx.length === 0) {
-    creatorTxList.innerHTML = `<div class="p-4 text-center text-xs text-slate-500">${tr('لا توجد معاملات مسجلة', 'No transactions recorded', 'No hay transacciones registradas')}</div>`;
+    creatorTxList.innerHTML = `<div class="p-4 text-center text-xs text-slate-500">${
+      baseCreatorTx.length === 0
+        ? tr('لا توجد معاملات مسجلة', 'No transactions recorded', 'No hay transacciones registradas')
+        : tr('لا توجد نتائج مطابقة للبحث', 'No matching results', 'No hay resultados que coincidan')
+    }</div>`;
   } else {
     creatorTxList.innerHTML = pagedCreatorTx.map(tx => {
       const chn = appState.channels.find(c => c.id === tx.channelId);
@@ -891,20 +1024,23 @@ function renderAll() {
               <div class="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
                 <span class="text-brand-300 font-semibold">${escapeHtml(chnName)}</span>
                 <span>•</span>
-                <span>${catLabel}</span>
+                <span>${escapeHtml(catLabel)}</span>
                 <span>•</span>
                 <span>${tx.date}</span>
               </div>
             </div>
           </div>
           <div class="flex items-center gap-1.5">
-            <span class="font-mono font-bold ${isRev ? 'text-emerald-400' : 'text-rose-400'}">
-              ${isRev ? '+' : '-'}${formatMoney(tx.amount)}
-            </span>
-            <button onclick="openEditCreatorTxModal('${tx.id}')" aria-label="${lang === 'ar' ? 'تعديل المعاملة' : 'Edit transaction'}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="${lang === 'ar' ? 'تعديل المعاملة' : 'Edit'}">
+            <div class="text-right">
+              <span class="font-mono font-bold ${isRev ? 'text-emerald-400' : 'text-rose-400'}">
+                ${isRev ? '+' : '-'}${formatMoney(tx.amount)}
+              </span>
+              ${(tx.currency && tx.currency !== appState.settings.currency && tx.foreignAmount) ? `<span class="text-[10px] font-mono text-slate-400 block font-normal">(${tx.foreignAmount.toLocaleString('en-US')} ${tx.currency})</span>` : ''}
+            </div>
+            <button onclick="openEditCreatorTxModal('${tx.id}')" aria-label="${tr('تعديل المعاملة', 'Edit transaction', 'Editar transacción')}" class="text-slate-500 hover:text-brand-400 transition-colors p-1" title="${tr('تعديل المعاملة', 'Edit transaction', 'Editar transacción')}">
               <i class="fa-solid fa-pen-to-square text-xs"></i>
             </button>
-            <button onclick="deleteCreatorTx('${tx.id}')" aria-label="${lang === 'ar' ? 'حذف المعاملة' : 'Delete transaction'}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="Delete">
+            <button onclick="deleteCreatorTx('${tx.id}')" aria-label="${tr('حذف المعاملة', 'Delete transaction', 'Eliminar transacción')}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="${tr('حذف المعاملة', 'Delete transaction', 'Eliminar transacción')}">
               <i class="fa-solid fa-trash-can text-xs"></i>
             </button>
           </div>
@@ -923,7 +1059,7 @@ function renderAll() {
   flIncBadgeContainer.innerHTML = appState.freelanceCats.income.map((cat, idx) => `
     <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-xs">
       <span>${escapeHtml(cat)}</span>
-      <button type="button" data-cat-idx="${idx}" data-cat-type="income" aria-label="${lang === 'ar' ? 'حذف التصنيف' : 'Remove category'}" class="btn-remove-fl-cat hover:text-rose-400 text-[10px]">&times;</button>
+      <button type="button" data-cat-idx="${idx}" data-cat-type="income" aria-label="${tr('حذف التصنيف', 'Remove category', 'Eliminar categoría')}" class="btn-remove-fl-cat hover:text-rose-400 text-[10px]">&times;</button>
     </span>
   `).join("");
 
@@ -931,20 +1067,35 @@ function renderAll() {
   flExpBadgeContainer.innerHTML = appState.freelanceCats.expense.map((cat, idx) => `
     <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-rose-500/10 text-rose-300 border border-rose-500/20 text-xs">
       <span>${escapeHtml(cat)}</span>
-      <button type="button" data-cat-idx="${idx}" data-cat-type="expense" aria-label="${lang === 'ar' ? 'حذف التصنيف' : 'Remove category'}" class="btn-remove-fl-cat hover:text-rose-400 text-[10px]">&times;</button>
+      <button type="button" data-cat-idx="${idx}" data-cat-type="expense" aria-label="${tr('حذف التصنيف', 'Remove category', 'Eliminar categoría')}" class="btn-remove-fl-cat hover:text-rose-400 text-[10px]">&times;</button>
     </span>
   `).join("");
 
   const flLedger = document.getElementById("freelanceTxList");
-  const flPageSize = paginationState.pageSize;
-  const flTotal = appState.freelanceTransactions.length;
+  const flQuery = (document.getElementById("searchFreelanceTxInput")?.value || "").trim().toLowerCase();
+  const rawPeriodFreelanceTx = isPeriodFiltered
+    ? appState.freelanceTransactions.filter(t => (t.date || "").startsWith(selectedPeriod))
+    : appState.freelanceTransactions;
+  const periodFreelanceTxList = sortByDateDesc(flQuery
+    ? rawPeriodFreelanceTx.filter(tx =>
+        (tx.title || "").toLowerCase().includes(flQuery) ||
+        (tx.category || "").toLowerCase().includes(flQuery) ||
+        String(tx.amount).includes(flQuery)
+      )
+    : rawPeriodFreelanceTx);
+  const flPageSize = isPrintMode ? Math.max(1, periodFreelanceTxList.length) : paginationState.pageSize;
+  const flTotal = periodFreelanceTxList.length;
   const flTotalPages = Math.max(1, Math.ceil(flTotal / flPageSize));
   if (paginationState.freelanceTxPage > flTotalPages) paginationState.freelanceTxPage = flTotalPages;
   const flStart = (paginationState.freelanceTxPage - 1) * flPageSize;
-  const pagedFreelanceTx = appState.freelanceTransactions.slice(flStart, flStart + flPageSize);
+  const pagedFreelanceTx = periodFreelanceTxList.slice(flStart, flStart + flPageSize);
 
-  if (appState.freelanceTransactions.length === 0) {
-    flLedger.innerHTML = `<div class="p-6 text-center text-xs text-slate-500">${tr('لا توجد معاملات مسجلة في مساحة العمل الحر', 'No freelance records logged yet', 'No hay registros de trabajo freelance aún')}</div>`;
+  if (periodFreelanceTxList.length === 0) {
+    flLedger.innerHTML = `<div class="p-6 text-center text-xs text-slate-500">${
+      rawPeriodFreelanceTx.length === 0
+        ? tr('لا توجد معاملات مسجلة في مساحة العمل الحر', 'No freelance records logged yet', 'No hay registros de trabajo freelance aún')
+        : tr('لا توجد نتائج مطابقة للبحث', 'No matching results', 'No hay resultados que coincidan')
+    }</div>`;
   } else {
     flLedger.innerHTML = pagedFreelanceTx.map(tx => {
       const isInc = tx.flow === "income";
@@ -969,10 +1120,10 @@ function renderAll() {
               </span>
               ${(tx.currency && tx.currency !== appState.settings.currency && tx.foreignAmount) ? `<span class="text-[10px] font-mono text-slate-400 block font-normal">(${tx.foreignAmount.toLocaleString('en-US')} ${tx.currency})</span>` : ''}
             </div>
-            <button onclick="openEditFreelanceTxModal('${tx.id}')" aria-label="${lang === 'ar' ? 'تعديل المعاملة' : 'Edit transaction'}" class="text-slate-500 hover:text-indigo-400 transition-colors p-1" title="${lang === 'ar' ? 'تعديل المعاملة' : 'Edit'}">
+            <button onclick="openEditFreelanceTxModal('${tx.id}')" aria-label="${tr('تعديل المعاملة', 'Edit transaction', 'Editar transacción')}" class="text-slate-500 hover:text-indigo-400 transition-colors p-1" title="${tr('تعديل المعاملة', 'Edit transaction', 'Editar transacción')}">
               <i class="fa-solid fa-pen-to-square text-xs"></i>
             </button>
-            <button onclick="deleteFreelanceTx('${tx.id}')" aria-label="${lang === 'ar' ? 'حذف المعاملة' : 'Delete transaction'}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="Delete">
+            <button onclick="deleteFreelanceTx('${tx.id}')" aria-label="${tr('حذف المعاملة', 'Delete transaction', 'Eliminar transacción')}" class="text-slate-500 hover:text-rose-400 transition-colors p-1" title="${tr('حذف المعاملة', 'Delete transaction', 'Eliminar transacción')}">
               <i class="fa-solid fa-trash-can text-xs"></i>
             </button>
           </div>
@@ -992,13 +1143,13 @@ function renderCharts(data) {
   const doughnutCtx = document.getElementById("wealthDoughnutChart")?.getContext("2d");
   if (doughnutCtx) {
     const labels = [
-      lang === 'ar' ? 'السيولة النقدية' : 'Liquid Cash',
+      tr('السيولة النقدية', 'Liquid Cash', 'Efectivo Líquido'),
       'USD',
       'EUR',
-      lang === 'ar' ? 'الذهب والسبائك' : 'Gold (24k)',
-      lang === 'ar' ? 'الأسهم والاستثمار' : 'Stocks & ETFs',
-      lang === 'ar' ? 'العقارات' : 'Real Estate',
-      lang === 'ar' ? 'أصول أخرى' : 'Other Assets'
+      tr('الذهب والسبائك', 'Gold (24k)', 'Oro y Lingotes'),
+      tr('الأسهم والاستثمار', 'Stocks & ETFs', 'Acciones y Fondos'),
+      tr('العقارات', 'Real Estate', 'Bienes Raíces'),
+      tr('أصول أخرى', 'Other Assets', 'Otros Activos')
     ];
     const values = [
       Math.max(0, data.liquidCash),
@@ -1072,9 +1223,9 @@ function renderCharts(data) {
   const barCtx = document.getElementById("pillarsBarChart")?.getContext("2d");
   if (barCtx) {
     const pillarLabels = [
-      lang === 'ar' ? 'المصاريف الشخصية' : 'Personal',
-      lang === 'ar' ? 'صناع المحتوى' : 'Content Creators',
-      lang === 'ar' ? 'العمل الحر' : 'Freelancing'
+      tr('المصاريف الشخصية', 'Personal', 'Personal'),
+      tr('صناع المحتوى', 'Content Creators', 'Creadores'),
+      tr('العمل الحر', 'Freelancing', 'Freelance')
     ];
     const inflows = [data.personalIncome, data.creatorRev, data.freelanceRev];
     const outflows = [data.personalObligations, data.creatorExp, data.freelanceExp];
@@ -1086,7 +1237,9 @@ function renderCharts(data) {
 
     if (pillarsChart) {
       pillarsChart.data.labels = pillarLabels;
+      pillarsChart.data.datasets[0].label = tr('التدفقات الواردة', 'Inflow', 'Ingresos');
       pillarsChart.data.datasets[0].data = inflows;
+      pillarsChart.data.datasets[1].label = tr('الالتزامات والمصاريف', 'Outflow', 'Gastos');
       pillarsChart.data.datasets[1].data = outflows;
       pillarsChart.update();
     } else {
@@ -1096,13 +1249,13 @@ function renderCharts(data) {
           labels: pillarLabels,
           datasets: [
             {
-              label: lang === 'ar' ? 'التدفقات الواردة' : 'Inflow',
+              label: tr('التدفقات الواردة', 'Inflow', 'Ingresos'),
               data: inflows,
               backgroundColor: '#10b981',
               borderRadius: 6
             },
             {
-              label: lang === 'ar' ? 'الالتزامات والمصاريف' : 'Outflow',
+              label: tr('الالتزامات والمصاريف', 'Outflow', 'Gastos'),
               data: outflows,
               backgroundColor: '#f43f5e',
               borderRadius: 6
@@ -1151,7 +1304,7 @@ function renderCharts(data) {
     const allMonthsSet = new Set();
     appState.personalIncomes.forEach(i => { if (i.date) allMonthsSet.add(i.date.substring(0, 7)); });
     appState.personalObligations.forEach(o => { if (o.date) allMonthsSet.add(o.date.substring(0, 7)); });
-    const currentYM = new Date().toISOString().substring(0, 7);
+    const currentYM = getLocalTodayStr().substring(0, 7);
     allMonthsSet.add(currentYM);
 
     const sortedAllMonths = Array.from(allMonthsSet).sort();
@@ -1352,15 +1505,6 @@ async function deleteFreelanceTx(id) {
   }
 }
 
-function removeFreelanceCategory(type, catName) {
-  if (appState.freelanceCats[type]) {
-    appState.freelanceCats[type] = appState.freelanceCats[type].filter(c => c !== catName);
-    persistState();
-    renderAll();
-    showToast(tr('تم حذف التصنيف', 'Category removed', 'Categoría eliminada'));
-  }
-}
-
 function escapeHtml(str) {
   if (!str) return '';
   return String(str)
@@ -1460,7 +1604,7 @@ async function fetchLiveMarketRates(isManual = false) {
     }
 
     const now = new Date();
-    const todayStr = now.toISOString().split("T")[0];
+    const todayStr = getLocalTodayStr(now);
     const timeStr = now.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
     appState.rates.lastSyncDate = todayStr;
     appState.rates.lastSyncTime = `${todayStr} (${timeStr})`;
@@ -1480,7 +1624,7 @@ async function fetchLiveMarketRates(isManual = false) {
 
 function checkAndRunDailyAutoSync() {
   if (appState.settings.autoSyncRates === false) return;
-  const todayStr = new Date().toISOString().split("T")[0];
+  const todayStr = getLocalTodayStr();
   if (appState.rates.lastSyncDate !== todayStr) {
     fetchLiveMarketRates(false);
   }
@@ -1522,7 +1666,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       else pinBox.classList.add("hidden");
     }
     if (pinInp) {
-      pinInp.value = appState?.settings?.pinCode || "";
+      pinInp.value = "";
+      pinInp.placeholder = appState?.settings?.pinEnabled ? ((i18n[appState?.settings?.lang] || i18n.en).pin_protected_placeholder || tr("•••• (محمي)", "•••• (Protected)", "•••• (Protegido)")) : "••••";
     }
 
     const isUnlocked = sessionStorage.getItem("puretech_unlocked") === "true";
@@ -1539,11 +1684,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   checkPinSecurityOnStartup();
 
-  document.getElementById("pinUnlockForm")?.addEventListener("submit", (e) => {
+  document.getElementById("pinUnlockForm")?.addEventListener("submit", async (e) => {
     e.preventDefault();
     const entered = (document.getElementById("pinUnlockInput")?.value || "").trim();
     const errorMsg = document.getElementById("pinErrorMsg");
-    if (entered === String(appState?.settings?.pinCode)) {
+    const enteredHash = typeof hashPinCode === "function" ? await hashPinCode(entered) : entered;
+    const storedPin = String(appState?.settings?.pinCode || "");
+    if (entered === storedPin || (enteredHash && enteredHash === storedPin)) {
       sessionStorage.setItem("puretech_unlocked", "true");
       document.getElementById("pinLockScreen")?.classList.add("hidden");
       if (errorMsg) errorMsg.classList.add("hidden");
@@ -1566,6 +1713,11 @@ document.addEventListener("DOMContentLoaded", async () => {
       dict.confirm_reset_pin_msg || "Forgot your PIN? This will disable the PIN lock and restore wallet access. Proceed?"
     );
     if (confirmed) {
+      const currentLang = appState?.settings?.lang || detectInitialLanguage();
+      const currentCurrency = appState?.settings?.currency || "USD";
+      appState = getDefaultCleanState();
+      appState.settings.lang = currentLang;
+      appState.settings.currency = currentCurrency;
       appState.settings.pinEnabled = false;
       appState.settings.pinCode = "";
       sessionStorage.setItem("puretech_unlocked", "true");
@@ -1575,6 +1727,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       document.getElementById("pinErrorMsg")?.classList.add("hidden");
       checkPinSecurityOnStartup();
       await persistState();
+      updateLanguageUI();
       renderAll();
       showToast(dict.pin_disabled || 'PIN lock disabled');
     }
@@ -1627,8 +1780,13 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
 
     appState.settings.pinEnabled = true;
-    appState.settings.pinCode = pinVal;
+    appState.settings.pinCode = typeof hashPinCode === "function" ? await hashPinCode(pinVal) : pinVal;
     sessionStorage.setItem("puretech_unlocked", "true");
+    const pinInp = document.getElementById("inputSettingsPin");
+    if (pinInp) {
+      pinInp.value = "";
+      pinInp.placeholder = dict.pin_protected_placeholder || tr("•••• (محمي)", "•••• (Protected)", "•••• (Protegido)");
+    }
     document.getElementById("btnQuickLock")?.classList.remove("hidden");
     await persistState();
     showToast(dict.pin_saved || 'PIN code saved');
@@ -1638,7 +1796,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   checkAndRunDailyAutoSync();
   setInterval(checkAndRunDailyAutoSync, 6 * 60 * 60 * 1000);
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = getLocalTodayStr();
   document.getElementById("txDateInput").value = today;
   document.getElementById("creatorTxDateInput").value = today;
   document.getElementById("flTxDateInput").value = today;
@@ -1672,6 +1830,9 @@ document.addEventListener("DOMContentLoaded", async () => {
     btn.addEventListener("click", () => {
       const targetLang = btn.getAttribute("data-lang");
       appState.settings.lang = targetLang;
+      if (typeof syncDefaultLocalizedStrings === "function") {
+        syncDefaultLocalizedStrings(appState, targetLang);
+      }
       persistState();
       updateLanguageUI();
       renderAll();
@@ -1679,15 +1840,121 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
-  document.getElementById("currencySelect").addEventListener("change", (e) => {
-    appState.settings.currency = e.target.value;
-    persistState();
+  const FALLBACK_RATES_BY_CURRENCY = {
+    USD: { usd: 1.00, eur: 1.08, gold: 85.50 },
+    EUR: { usd: 0.92, eur: 1.00, gold: 79.00 },
+    EGP: { usd: 48.50, eur: 52.20, gold: 3750 },
+    SAR: { usd: 3.75, eur: 4.05, gold: 320.50 },
+    AED: { usd: 3.67, eur: 3.97, gold: 314.00 },
+    KWD: { usd: 0.307, eur: 0.332, gold: 26.25 },
+    QAR: { usd: 3.64, eur: 3.93, gold: 311.50 },
+    OMR: { usd: 0.385, eur: 0.416, gold: 32.90 },
+    TND: { usd: 3.10, eur: 3.35, gold: 265.00 },
+    MAD: { usd: 9.95, eur: 10.75, gold: 850.00 },
+    TRY: { usd: 34.20, eur: 36.90, gold: 2925 },
+    GEL: { usd: 2.72, eur: 2.94, gold: 232.50 }
+  };
+
+  document.getElementById("currencySelect").addEventListener("change", async (e) => {
+    const oldCurr = appState.settings.currency || "USD";
+    const newCurr = e.target.value;
+    if (oldCurr === newCurr) return;
+
+    const oldUsdRate = Number(appState.rates.usd) || (FALLBACK_RATES_BY_CURRENCY[oldCurr]?.usd) || 1;
+
+    const hasExistingRecords = (
+      appState.personalIncomes.length > 0 ||
+      appState.personalObligations.length > 0 ||
+      appState.assets.length > 0 ||
+      appState.creatorTransactions.length > 0 ||
+      appState.freelanceTransactions.length > 0
+    );
+
+    let shouldConvert = false;
+    if (hasExistingRecords) {
+      const lang = appState.settings.lang || "ar";
+      const dict = i18n[lang] || i18n.en;
+      const titleMsg = dict.convert_currency_title || "Convert Existing Amounts";
+      const bodyMsg = (dict.convert_currency_msg || "Convert all logged transactions and assets from ({old}) to ({new})?")
+        .replace("{old}", oldCurr)
+        .replace("{new}", newCurr);
+      shouldConvert = await requestConfirmation(titleMsg, bodyMsg);
+    }
+
+    appState.settings.currency = newCurr;
+    if (FALLBACK_RATES_BY_CURRENCY[newCurr]) {
+      appState.rates.usd = FALLBACK_RATES_BY_CURRENCY[newCurr].usd;
+      appState.rates.eur = FALLBACK_RATES_BY_CURRENCY[newCurr].eur;
+      appState.rates.gold = FALLBACK_RATES_BY_CURRENCY[newCurr].gold;
+    }
+
+    // Fetch live market rates first (when online) so conversion uses accurate live exchange rates
+    if (navigator.onLine && appState.settings.autoSyncRates !== false) {
+      await fetchLiveMarketRates(false);
+    }
+
+    const newUsdRate = Number(appState.rates.usd) || (FALLBACK_RATES_BY_CURRENCY[newCurr]?.usd) || 1;
+    const conversionFactor = newUsdRate / oldUsdRate;
+
+    if (shouldConvert && Math.abs(conversionFactor - 1) > 0.0001) {
+      const scaleVal = (v) => Number((Number(v || 0) * conversionFactor).toFixed(2));
+      const scaleTxList = (list) => {
+        list.forEach(tx => {
+          const origCurr = tx.currency || oldCurr;
+          const origForeignAmt = tx.foreignAmount ? Number(tx.foreignAmount) : ((origCurr === "USD" || origCurr === "EUR") ? Number(tx.amount) : null);
+
+          if ((origCurr === "USD" || origCurr === "EUR") && origForeignAmt) {
+            if (newCurr === origCurr) {
+              // Target base currency matches the original foreign currency
+              tx.amount = Number(origForeignAmt.toFixed(2));
+              tx.currency = newCurr;
+              tx.foreignAmount = null;
+              tx.exchangeRate = 1;
+            } else {
+              // Convert from original USD/EUR into the new base currency
+              const targetRate = origCurr === "USD" ? (Number(appState.rates.usd) || 1) : (Number(appState.rates.eur) || 1);
+              tx.currency = origCurr;
+              tx.foreignAmount = origForeignAmt;
+              tx.exchangeRate = targetRate;
+              tx.amount = Number((origForeignAmt * targetRate).toFixed(2));
+            }
+          } else {
+            tx.amount = scaleVal(tx.amount);
+            tx.currency = newCurr;
+            tx.foreignAmount = null;
+            tx.exchangeRate = 1;
+          }
+        });
+      };
+      scaleTxList(appState.personalIncomes);
+      scaleTxList(appState.personalObligations);
+      scaleTxList(appState.creatorTransactions);
+      scaleTxList(appState.freelanceTransactions);
+
+      appState.assets.forEach(ast => {
+        if (ast.category === "usd") {
+          ast.unitPrice = appState.rates.usd;
+        } else if (ast.category === "eur") {
+          ast.unitPrice = appState.rates.eur;
+        } else if (ast.category === "gold") {
+          ast.unitPrice = getCalculatedGoldRate(ast.karat || "24k");
+        } else {
+          ast.unitPrice = scaleVal(ast.unitPrice);
+        }
+        if (ast.purchasePrice !== undefined && ast.purchasePrice !== null && ast.purchasePrice !== "") {
+          ast.purchasePrice = scaleVal(ast.purchasePrice);
+        }
+      });
+
+      if (appState.monthlyBudget && appState.monthlyBudget.amount > 0) {
+        appState.monthlyBudget.amount = scaleVal(appState.monthlyBudget.amount);
+      }
+    }
+
+    await persistState();
     updateLanguageUI();
     renderAll();
-    showToast(`${appState.settings.currency} Currency Selected`);
-    if (appState.settings.autoSyncRates !== false) {
-      fetchLiveMarketRates(false);
-    }
+    showToast(`${appState.settings.currency} ${tr('تم تحديث العملة الأساسية', 'Currency Updated', 'Moneda actualizada')}`);
   });
 
   document.getElementById("includeOnlineToggle").addEventListener("change", (e) => {
@@ -1695,8 +1962,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     persistState();
     renderAll();
     showToast(appState.settings.includeOnline 
-      ? (appState.settings.lang === 'ar' ? 'تم دمج أرباح العمل أونلاين بالسيولة' : 'Online earnings merged into liquidity')
-      : (appState.settings.lang === 'ar' ? 'تم فصل أرباح العمل أونلاين' : 'Online earnings decoupled')
+      ? tr('تم دمج أرباح العمل أونلاين بالسيولة', 'Online earnings merged into liquidity', 'Ganancias online integradas en la liquidez')
+      : tr('تم فصل أرباح العمل أونلاين', 'Online earnings decoupled', 'Ganancias online desvinculadas')
     );
   });
 
@@ -1754,10 +2021,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     renderAll();
   });
 
-  function renderPersonalTab() {
-    renderAll();
-  }
-
   const onIncomesSearch = debounce(() => {
     paginationState.incomesPage = 1;
     renderAll();
@@ -1770,10 +2033,56 @@ document.addEventListener("DOMContentLoaded", async () => {
   }, 180);
   document.getElementById("searchObligationsInput")?.addEventListener("input", onObligationsSearch);
 
+  const onAssetsSearch = debounce(() => {
+    paginationState.assetsPage = 1;
+    renderAll();
+  }, 180);
+  document.getElementById("searchAssetsInput")?.addEventListener("input", onAssetsSearch);
+
+  const onCreatorTxSearch = debounce(() => {
+    paginationState.creatorTxPage = 1;
+    renderAll();
+  }, 180);
+  document.getElementById("searchCreatorTxInput")?.addEventListener("input", onCreatorTxSearch);
+
+  const onFreelanceTxSearch = debounce(() => {
+    paginationState.freelanceTxPage = 1;
+    renderAll();
+  }, 180);
+  document.getElementById("searchFreelanceTxInput")?.addEventListener("input", onFreelanceTxSearch);
+
+  document.getElementById("btnAddPersonalIncomeCatDirect")?.addEventListener("click", () => {
+    const inp = document.getElementById("newPersonalIncomeCatDirectInput");
+    const val = inp?.value.trim();
+    if (!appState.customPersonalCats) appState.customPersonalCats = { income: [], expense: [] };
+    if (val && !appState.customPersonalCats.income.includes(val)) {
+      appState.customPersonalCats.income.push(val);
+      inp.value = "";
+      persistState();
+      renderAll();
+      showToast(tr('تمت إضافة التصنيف الشخصي', 'Custom category added', 'Categoría personalizada agregada'));
+    }
+  });
+
+  document.getElementById("btnAddPersonalExpenseCatDirect")?.addEventListener("click", () => {
+    const inp = document.getElementById("newPersonalExpenseCatDirectInput");
+    const val = inp?.value.trim();
+    if (!appState.customPersonalCats) appState.customPersonalCats = { income: [], expense: [] };
+    if (val && !appState.customPersonalCats.expense.includes(val)) {
+      appState.customPersonalCats.expense.push(val);
+      inp.value = "";
+      persistState();
+      renderAll();
+      showToast(tr('تمت إضافة التصنيف الشخصي', 'Custom category added', 'Categoría personalizada agregada'));
+    }
+  });
+
   document.getElementById("cashflowPeriodSelect")?.addEventListener("change", (e) => {
     paginationState.selectedPeriod = e.target.value;
     paginationState.incomesPage = 1;
     paginationState.obligationsPage = 1;
+    paginationState.creatorTxPage = 1;
+    paginationState.freelanceTxPage = 1;
     renderAll();
   });
 
@@ -1826,7 +2135,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       appState.freelanceCats[type].splice(idx, 1);
       persistState();
       renderAll();
-      showToast(appState.settings.lang === 'ar' ? 'تم حذف التصنيف' : 'Category removed');
+      showToast(tr('تم حذف التصنيف', 'Category removed', 'Categoría eliminada'));
+    }
+  });
+
+  document.addEventListener("click", (e) => {
+    const btn = e.target.closest(".btn-remove-personal-cat");
+    if (!btn) return;
+    const type = btn.getAttribute("data-pcat-type");
+    const idx = parseInt(btn.getAttribute("data-pcat-idx"), 10);
+    if (type && !isNaN(idx) && appState.customPersonalCats?.[type]?.[idx]) {
+      appState.customPersonalCats[type].splice(idx, 1);
+      persistState();
+      renderAll();
+      showToast(tr('تم حذف التصنيف المخصص', 'Custom category removed', 'Categoría personalizada eliminada'));
     }
   });
 
@@ -1845,7 +2167,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const curr = currSelect.value;
     const amt = parseFloat(amtInput.value);
 
-    if (curr === "BASE" || isNaN(amt) || amt <= 0) {
+    if (curr === "BASE" || curr === appState.settings.currency || isNaN(amt) || amt <= 0) {
       infoBox.classList.add("hidden");
       return;
     }
@@ -1873,7 +2195,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     document.getElementById("txTitleInput").value = "";
     document.getElementById("txAmountInput").value = "";
-    document.getElementById("txDateInput").value = new Date().toISOString().split("T")[0];
+    document.getElementById("txDateInput").value = getLocalTodayStr();
     const currSelect = document.getElementById("txCurrencySelect");
     if (currSelect) currSelect.value = "BASE";
     document.getElementById("txConversionInfo")?.classList.add("hidden");
@@ -1887,22 +2209,25 @@ document.addEventListener("DOMContentLoaded", async () => {
     const catSource = isIncome ? categoriesMap.personal_income : categoriesMap.personal_expense;
     const customList = (appState.customPersonalCats && appState.customPersonalCats[type]) || [];
 
-    let options = Object.keys(catSource).map(k => `
-      <option value="${k}">${catSource[k][lang] || catSource[k].en}</option>
-    `);
+    txCatSelect.innerHTML = "";
+    Object.keys(catSource).forEach(k => {
+      const opt = new Option(catSource[k][lang] || catSource[k].en, k);
+      txCatSelect.add(opt);
+    });
 
     if (customList.length > 0) {
-      options.push(`<optgroup label="${lang === 'ar' ? 'تصنيفات مخصصة' : lang === 'es' ? 'Personalizadas' : 'Custom Categories'}">`);
+      const group = document.createElement("optgroup");
+      group.label = lang === "ar" ? "تصنيفات مخصصة" : lang === "es" ? "Personalizadas" : "Custom Categories";
       customList.forEach(c => {
-        options.push(`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`);
+        const opt = new Option(c, c);
+        group.appendChild(opt);
       });
-      options.push(`</optgroup>`);
+      txCatSelect.appendChild(group);
     }
 
-    txCatSelect.innerHTML = options.join("");
     if (selectedVal) {
       if (![...txCatSelect.options].some(o => o.value === selectedVal)) {
-        txCatSelect.innerHTML += `<option value="${escapeHtml(selectedVal)}">${escapeHtml(selectedVal)}</option>`;
+        txCatSelect.add(new Option(selectedVal, selectedVal));
       }
       txCatSelect.value = selectedVal;
     }
@@ -1926,9 +2251,9 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     document.getElementById("txTitleInput").value = item.title;
     const currSelect = document.getElementById("txCurrencySelect");
-    if (item.currency === "USD" || item.currency === "EUR") {
+    if ((item.currency === "USD" || item.currency === "EUR") && item.currency !== appState.settings.currency && item.foreignAmount) {
       if (currSelect) currSelect.value = item.currency;
-      document.getElementById("txAmountInput").value = item.foreignAmount || item.amount;
+      document.getElementById("txAmountInput").value = item.foreignAmount;
     } else {
       if (currSelect) currSelect.value = "BASE";
       document.getElementById("txAmountInput").value = item.amount;
@@ -1991,12 +2316,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     let foreignAmount = null;
     let exchangeRate = 1;
 
-    if (currCode === "USD") {
+    if (currCode === "USD" && appState.settings.currency !== "USD") {
       currency = "USD";
       exchangeRate = Number(appState.rates.usd) || 1;
       foreignAmount = rawAmount;
       finalBaseAmount = Number((rawAmount * exchangeRate).toFixed(2));
-    } else if (currCode === "EUR") {
+    } else if (currCode === "EUR" && appState.settings.currency !== "EUR") {
       currency = "EUR";
       exchangeRate = Number(appState.rates.eur) || 1;
       foreignAmount = rawAmount;
@@ -2018,7 +2343,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       showToast(tr('تم تعديل المعاملة بنجاح', 'Transaction updated', 'Transacción actualizada con éxito'));
     } else {
       const item = {
-        id: `${isIncome ? 'inc' : 'exp'}-${Date.now()}`,
+        id: generateUniqueId(isIncome ? 'inc' : 'exp'),
         title,
         amount: finalBaseAmount,
         date,
@@ -2037,6 +2362,8 @@ document.addEventListener("DOMContentLoaded", async () => {
       showToast(tr('تم تسجيل المعاملة بنجاح', 'Transaction saved', 'Transacción guardada con éxito'));
     }
 
+    appState.personalIncomes.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    appState.personalObligations.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     await persistState();
     trackOperationAndRemind();
     txModal.classList.add("hidden");
@@ -2050,12 +2377,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const assetGoldKaratSelect = document.getElementById("assetGoldKaratSelect");
   const assetPurchasePriceInput = document.getElementById("assetPurchasePriceInput");
 
-  function getCalculatedGoldRate(karat) {
-    const base24k = Number(appState.rates.gold || 0);
-    if (karat === "21k") return Math.round(base24k * (21 / 24));
-    if (karat === "18k") return Math.round(base24k * (18 / 24));
-    return base24k;
-  }
+  // Uses global getCalculatedGoldRate(karat)
 
   window.openEditAssetModal = function(id) {
     const ast = appState.assets.find(a => a.id === id);
@@ -2162,7 +2484,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       showToast((i18n[lang] || i18n.en).asset_updated || tr('تم تعديل الأصل بنجاح', 'Asset updated', 'Activo actualizado con éxito'));
     } else {
       const item = {
-        id: `ast-${Date.now()}`,
+        id: generateUniqueId('ast'),
         name,
         category,
         quantity,
@@ -2223,7 +2545,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       showToast((i18n[lang] || i18n.en).channel_updated || tr('تم تعديل بيانات القناة بنجاح', 'Channel updated', 'Canal actualizado con éxito'));
     } else {
       const chn = {
-        id: `chn-${Date.now()}`,
+        id: generateUniqueId('chn'),
         platform,
         name
       };
@@ -2241,6 +2563,30 @@ document.addEventListener("DOMContentLoaded", async () => {
   const creatorFlowSelect = document.getElementById("creatorTxFlowSelect");
   const creatorCatSelect = document.getElementById("creatorTxCatSelect");
 
+  function updateCreatorTxConversionPreview() {
+    const currSelect = document.getElementById("creatorTxCurrencySelect");
+    const amtInput = document.getElementById("creatorTxAmountInput");
+    const infoBox = document.getElementById("creatorConversionInfo");
+    const convertedVal = document.getElementById("creatorConvertedVal");
+    if (!currSelect || !amtInput || !infoBox || !convertedVal) return;
+
+    const curr = currSelect.value;
+    const amt = parseFloat(amtInput.value);
+
+    if (curr === "BASE" || curr === appState.settings.currency || isNaN(amt) || amt <= 0) {
+      infoBox.classList.add("hidden");
+      return;
+    }
+
+    const rate = curr === "USD" ? (Number(appState.rates.usd) || 1) : (Number(appState.rates.eur) || 1);
+    const baseEq = amt * rate;
+    convertedVal.textContent = `≈ ${baseEq.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${appState.settings.currency}`;
+    infoBox.classList.remove("hidden");
+  }
+
+  document.getElementById("creatorTxAmountInput")?.addEventListener("input", updateCreatorTxConversionPreview);
+  document.getElementById("creatorTxCurrencySelect")?.addEventListener("change", updateCreatorTxConversionPreview);
+
   function populateCreatorCats() {
     const flow = creatorFlowSelect.value;
     const lang = appState.settings.lang;
@@ -2255,7 +2601,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!tx) return;
     const lang = appState.settings.lang;
     const titleEl = document.getElementById("creatorTxModalTitle");
-    if (titleEl) titleEl.textContent = (i18n[lang] || i18n.en).modal_creator_tx_edit || (lang === 'ar' ? 'تعديل معاملة القناة' : 'Edit Channel Transaction');
+    if (titleEl) titleEl.textContent = (i18n[lang] || i18n.en).modal_creator_tx_edit || tr('تعديل معاملة القناة', 'Edit Channel Transaction', 'Editar Transacción de Canal');
 
     document.getElementById("creatorTxEditId").value = tx.id;
     document.getElementById("creatorTxChannelSelect").value = tx.channelId;
@@ -2263,7 +2609,15 @@ document.addEventListener("DOMContentLoaded", async () => {
     populateCreatorCats();
     creatorCatSelect.value = tx.category;
     document.getElementById("creatorTxTitleInput").value = tx.title;
-    document.getElementById("creatorTxAmountInput").value = tx.amount;
+    const currSelect = document.getElementById("creatorTxCurrencySelect");
+    if ((tx.currency === "USD" || tx.currency === "EUR") && tx.currency !== appState.settings.currency && tx.foreignAmount) {
+      if (currSelect) currSelect.value = tx.currency;
+      document.getElementById("creatorTxAmountInput").value = tx.foreignAmount;
+    } else {
+      if (currSelect) currSelect.value = "BASE";
+      document.getElementById("creatorTxAmountInput").value = tx.amount;
+    }
+    updateCreatorTxConversionPreview();
     document.getElementById("creatorTxDateInput").value = tx.date;
     creatorTxModal.classList.remove("hidden");
   };
@@ -2282,7 +2636,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     populateCreatorCats();
     document.getElementById("creatorTxTitleInput").value = "";
     document.getElementById("creatorTxAmountInput").value = "";
-    document.getElementById("creatorTxDateInput").value = new Date().toISOString().split("T")[0];
+    const currSelect = document.getElementById("creatorTxCurrencySelect");
+    if (currSelect) currSelect.value = "BASE";
+    document.getElementById("creatorConversionInfo")?.classList.add("hidden");
+    document.getElementById("creatorTxDateInput").value = getLocalTodayStr();
     creatorTxModal.classList.remove("hidden");
   });
 
@@ -2295,14 +2652,32 @@ document.addEventListener("DOMContentLoaded", async () => {
     const flow = creatorFlowSelect.value;
     const category = creatorCatSelect.value;
     const title = document.getElementById("creatorTxTitleInput").value.trim();
-    const amount = parseFloat(document.getElementById("creatorTxAmountInput").value);
+    const rawAmount = parseFloat(document.getElementById("creatorTxAmountInput").value);
     const date = document.getElementById("creatorTxDateInput").value;
     const lang = appState.settings.lang;
 
     // Defensive input validation
-    if (!title || isNaN(amount) || amount <= 0) {
+    if (!title || isNaN(rawAmount) || rawAmount <= 0) {
       showToast(tr('يرجى إدخال وصف ومبلغ صحيح أكبر من الصفر', 'Please enter a valid title and amount greater than zero', 'Ingrese una descripción y un monto válidos mayores a cero'), 'error');
       return;
+    }
+
+    const currCode = document.getElementById("creatorTxCurrencySelect")?.value || "BASE";
+    let finalBaseAmount = rawAmount;
+    let currency = appState.settings.currency;
+    let foreignAmount = null;
+    let exchangeRate = 1;
+
+    if (currCode === "USD" && appState.settings.currency !== "USD") {
+      currency = "USD";
+      exchangeRate = Number(appState.rates.usd) || 1;
+      foreignAmount = rawAmount;
+      finalBaseAmount = Number((rawAmount * exchangeRate).toFixed(2));
+    } else if (currCode === "EUR" && appState.settings.currency !== "EUR") {
+      currency = "EUR";
+      exchangeRate = Number(appState.rates.eur) || 1;
+      foreignAmount = rawAmount;
+      finalBaseAmount = Number((rawAmount * exchangeRate).toFixed(2));
     }
 
     if (editId) {
@@ -2312,25 +2687,32 @@ document.addEventListener("DOMContentLoaded", async () => {
         tx.flow = flow;
         tx.category = category;
         tx.title = title;
-        tx.amount = amount;
+        tx.amount = finalBaseAmount;
         tx.date = date;
+        tx.currency = currency;
+        tx.foreignAmount = foreignAmount;
+        tx.exchangeRate = exchangeRate;
       }
       showToast((i18n[lang] || i18n.en).creator_tx_updated || tr('تم تعديل المعاملة بنجاح', 'Transaction updated', 'Transacción actualizada con éxito'));
     } else {
       const tx = {
-        id: `ctx-${Date.now()}`,
+        id: generateUniqueId('ctx'),
         channelId,
         flow,
         category,
         title,
-        amount,
-        date
+        amount: finalBaseAmount,
+        date,
+        currency,
+        foreignAmount,
+        exchangeRate
       };
       appState.creatorTransactions.unshift(tx);
       paginationState.creatorTxPage = 1;
       showToast(tr('تم تسجيل المعاملة بالقناة', 'Channel entry saved', 'Transacción registrada en el canal'));
     }
 
+    appState.creatorTransactions.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     await persistState();
     trackOperationAndRemind();
     creatorTxModal.classList.add("hidden");
@@ -2351,7 +2733,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const curr = currSelect.value;
     const amt = parseFloat(amtInput.value);
 
-    if (curr === "BASE" || isNaN(amt) || amt <= 0) {
+    if (curr === "BASE" || curr === appState.settings.currency || isNaN(amt) || amt <= 0) {
       infoBox.classList.add("hidden");
       return;
     }
@@ -2365,10 +2747,21 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("flTxAmountInput")?.addEventListener("input", updateFlTxConversionPreview);
   document.getElementById("flTxCurrencySelect")?.addEventListener("change", updateFlTxConversionPreview);
 
-  function populateFreelanceCats() {
+  function populateFreelanceCats(selectedVal = null) {
     const flow = flFlowSelect.value;
-    const list = flow === "income" ? appState.freelanceCats.income : appState.freelanceCats.expense;
-    flCatSelect.innerHTML = list.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+    const list = (flow === "income" ? appState.freelanceCats.income : appState.freelanceCats.expense) || [];
+    const fallbackLabel = tr('عام', 'General', 'General');
+    const effectiveList = list.length > 0 ? list : [fallbackLabel];
+    flCatSelect.innerHTML = "";
+    effectiveList.forEach(c => {
+      flCatSelect.add(new Option(c, c));
+    });
+    if (selectedVal) {
+      if (![...flCatSelect.options].some(o => o.value === selectedVal)) {
+        flCatSelect.add(new Option(selectedVal, selectedVal));
+      }
+      flCatSelect.value = selectedVal;
+    }
   }
 
   window.openEditFreelanceTxModal = function(id) {
@@ -2376,17 +2769,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     if (!tx) return;
     const lang = appState.settings.lang;
     const titleEl = document.getElementById("flTxModalTitle");
-    if (titleEl) titleEl.textContent = (i18n[lang] || i18n.en).modal_fl_tx_edit || (lang === 'ar' ? 'تعديل معاملة العمل الحر' : 'Edit Freelance Transaction');
+    if (titleEl) titleEl.textContent = (i18n[lang] || i18n.en).modal_fl_tx_edit || tr('تعديل معاملة العمل الحر', 'Edit Freelance Transaction', 'Editar entrada de freelance');
 
     document.getElementById("flTxEditId").value = tx.id;
     flFlowSelect.value = tx.flow || "income";
-    populateFreelanceCats();
-    flCatSelect.value = tx.category || "";
+    populateFreelanceCats(tx.category);
     document.getElementById("flTxTitleInput").value = tx.title || "";
     const currSelect = document.getElementById("flTxCurrencySelect");
-    if (tx.currency === "USD" || tx.currency === "EUR") {
+    if ((tx.currency === "USD" || tx.currency === "EUR") && tx.currency !== appState.settings.currency && tx.foreignAmount) {
       if (currSelect) currSelect.value = tx.currency;
-      document.getElementById("flTxAmountInput").value = tx.foreignAmount || tx.amount;
+      document.getElementById("flTxAmountInput").value = tx.foreignAmount;
     } else {
       if (currSelect) currSelect.value = "BASE";
       document.getElementById("flTxAmountInput").value = tx.amount;
@@ -2409,17 +2801,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     const currSelect = document.getElementById("flTxCurrencySelect");
     if (currSelect) currSelect.value = "BASE";
     document.getElementById("flConversionInfo")?.classList.add("hidden");
-    document.getElementById("flTxDateInput").value = new Date().toISOString().split("T")[0];
+    document.getElementById("flTxDateInput").value = getLocalTodayStr();
     flTxModal.classList.remove("hidden");
   });
 
-  flFlowSelect.addEventListener("change", populateFreelanceCats);
+  flFlowSelect.addEventListener("change", () => populateFreelanceCats());
 
   document.getElementById("freelanceTxForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const editId = document.getElementById("flTxEditId").value;
     const flow = flFlowSelect.value;
-    const category = flCatSelect.value;
+    const category = flCatSelect.value || tr("عام", "General", "General");
     const title = document.getElementById("flTxTitleInput").value.trim();
     const rawAmount = parseFloat(document.getElementById("flTxAmountInput").value);
     const date = document.getElementById("flTxDateInput").value;
@@ -2437,12 +2829,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     let foreignAmount = null;
     let exchangeRate = 1;
 
-    if (currCode === "USD") {
+    if (currCode === "USD" && appState.settings.currency !== "USD") {
       currency = "USD";
       exchangeRate = Number(appState.rates.usd) || 1;
       foreignAmount = rawAmount;
       finalBaseAmount = Number((rawAmount * exchangeRate).toFixed(2));
-    } else if (currCode === "EUR") {
+    } else if (currCode === "EUR" && appState.settings.currency !== "EUR") {
       currency = "EUR";
       exchangeRate = Number(appState.rates.eur) || 1;
       foreignAmount = rawAmount;
@@ -2464,7 +2856,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       showToast((i18n[lang] || i18n.en).fl_tx_updated || tr('تم تعديل معاملة العمل الحر بنجاح', 'Freelance transaction updated', 'Transacción freelance actualizada con éxito'));
     } else {
       const tx = {
-        id: `flx-${Date.now()}`,
+        id: generateUniqueId('flx'),
         flow,
         category,
         title,
@@ -2479,6 +2871,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       showToast(tr('تم تسجيل عملية العمل الحر', 'Freelance entry saved', 'Entrada de freelance guardada'));
     }
 
+    appState.freelanceTransactions.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     await persistState();
     trackOperationAndRemind();
     flTxModal.classList.add("hidden");
@@ -2512,7 +2905,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("btnCloneRecurring")?.addEventListener("click", async () => {
     const lang = appState.settings.lang;
     const currentPeriod = paginationState.selectedPeriod === "all"
-      ? new Date().toISOString().slice(0, 7)
+      ? getLocalTodayStr().slice(0, 7)
       : paginationState.selectedPeriod;
 
     // Find all distinct months available in personalObligations
@@ -2533,9 +2926,13 @@ document.addEventListener("DOMContentLoaded", async () => {
       return;
     }
 
-    const prevItems = appState.personalObligations.filter(o => o.date && o.date.startsWith(sourceMonth));
+    const existingInTarget = appState.personalObligations.filter(o => o.date && o.date.startsWith(currentPeriod));
+    const prevItems = appState.personalObligations
+      .filter(o => o.date && o.date.startsWith(sourceMonth))
+      .filter(item => !existingInTarget.some(ex => ex.title === item.title && ex.category === item.category && Number(ex.amount) === Number(item.amount)));
+
     if (prevItems.length === 0) {
-      showToast(tr('لا توجد التزامات في الشهر المصدر', 'No obligations found in source month', 'No se encontraron obligaciones en el mes de origen'), 'info');
+      showToast(tr('كافة التزامات الشهر السابق منسوخة بالفعل في هذا الشهر', 'All recurring obligations are already cloned into this month', 'Todas las obligaciones recurrentes ya están clonadas en este mes'), 'info');
       return;
     }
 
@@ -2549,15 +2946,19 @@ document.addEventListener("DOMContentLoaded", async () => {
     const ok = await requestConfirmation(titleMsg, textMsg);
     if (!ok) return;
 
+    const [targetYear, targetMonth] = currentPeriod.split("-").map(Number);
+    const maxDayInMonth = new Date(targetYear, targetMonth, 0).getDate();
+
     let clonedCount = 0;
     prevItems.forEach(item => {
-      const day = item.date ? item.date.slice(8, 10) : "01";
+      const rawDay = parseInt(item.date ? item.date.slice(8, 10) : "1", 10) || 1;
+      const clampedDay = String(Math.min(Math.max(1, rawDay), maxDayInMonth)).padStart(2, "0");
       const newTx = {
-        id: `exp-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        id: `exp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         title: item.title,
         amount: item.amount,
         category: item.category,
-        date: `${currentPeriod}-${day}`,
+        date: `${currentPeriod}-${clampedDay}`,
         currency: item.currency || appState.settings.currency,
         foreignAmount: item.foreignAmount || null,
         exchangeRate: item.exchangeRate || 1
@@ -2566,6 +2967,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       clonedCount++;
     });
 
+    appState.personalObligations.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     paginationState.obligationsPage = 1;
     await persistState();
     trackOperationAndRemind();
@@ -2578,7 +2980,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `PureTech_Wallet_Backup_${new Date().toISOString().split("T")[0]}.json`;
+    a.download = `PureTech_Wallet_Backup_${getLocalTodayStr()}.json`;
     a.click();
     URL.revokeObjectURL(url);
     showToast(tr('تم تحميل ملف النسخة الاحتياطية بنجاح', 'Backup JSON exported successfully', 'Copia de seguridad JSON descargada con éxito'));
@@ -2593,6 +2995,9 @@ document.addEventListener("DOMContentLoaded", async () => {
         const parsed = JSON.parse(event.target.result);
         if (parsed && typeof parsed === "object" && (parsed.settings || parsed.personalIncomes)) {
           appState = typeof mergeWithDefaultState === "function" ? mergeWithDefaultState(parsed) : parsed;
+          if (typeof ensureHashedPinState === "function") {
+            appState = await ensureHashedPinState(appState);
+          }
           await persistState();
           updateLanguageUI();
           renderAll();
@@ -2624,12 +3029,12 @@ document.addEventListener("DOMContentLoaded", async () => {
     let csvContent = "\uFEFF";
     csvContent += "Type,Category,Description/Name,BaseAmount,Date/Quantity,BaseCurrency,ForeignAmount,ForeignCurrency\n";
 
-    appState.personalIncomes.forEach(i => {
+    sortByDateDesc(appState.personalIncomes).forEach(i => {
       const fAmt = (i.currency && i.currency !== appState.settings.currency && i.foreignAmount) ? i.foreignAmount : "";
       const fCurr = (i.currency && i.currency !== appState.settings.currency) ? i.currency : "";
       csvContent += `${sanitizeCsvCell("Personal Income")},${sanitizeCsvCell(i.category)},${sanitizeCsvCell(i.title)},${sanitizeCsvCell(i.amount)},${sanitizeCsvCell(i.date)},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell(fAmt)},${sanitizeCsvCell(fCurr)}\n`;
     });
-    appState.personalObligations.forEach(o => {
+    sortByDateDesc(appState.personalObligations).forEach(o => {
       const fAmt = (o.currency && o.currency !== appState.settings.currency && o.foreignAmount) ? -Number(o.foreignAmount) : "";
       const fCurr = (o.currency && o.currency !== appState.settings.currency) ? o.currency : "";
       csvContent += `${sanitizeCsvCell("Personal Obligation")},${sanitizeCsvCell(o.category)},${sanitizeCsvCell(o.title)},${sanitizeCsvCell(-Number(o.amount || 0))},${sanitizeCsvCell(o.date)},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell(fAmt)},${sanitizeCsvCell(fCurr)}\n`;
@@ -2639,24 +3044,20 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (a.category === "usd") unitPrice = Number(appState.rates.usd || 0);
       if (a.category === "eur") unitPrice = Number(appState.rates.eur || 0);
       if (a.category === "gold") {
-        const base24k = Number(appState.rates.gold || 0);
-        const karat = a.karat || "24k";
-        const factor = karat === "21k" ? (21 / 24) : (karat === "18k" ? (18 / 24) : 1);
-        const rawGoldPrice = base24k * factor;
-        unitPrice = (appState.settings.currency === "USD" || appState.settings.currency === "EUR" || base24k < 1000)
-          ? Number(rawGoldPrice.toFixed(2))
-          : Math.round(rawGoldPrice);
+        unitPrice = getCalculatedGoldRate(a.karat || "24k");
       }
       const total = Number(a.quantity || 0) * unitPrice;
       const catLabel = a.category === "gold" ? `gold (${(a.karat || "24k").toUpperCase()})` : a.category;
       csvContent += `${sanitizeCsvCell("Asset")},${sanitizeCsvCell(catLabel)},${sanitizeCsvCell(a.name)},${sanitizeCsvCell(total)},${sanitizeCsvCell(`Qty: ${a.quantity}`)},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell("")},${sanitizeCsvCell("")}\n`;
     });
-    appState.creatorTransactions.forEach(t => {
+    sortByDateDesc(appState.creatorTransactions).forEach(t => {
       const isRev = t.flow === "revenue";
       const signedAmt = isRev ? Number(t.amount || 0) : -Number(t.amount || 0);
-      csvContent += `${sanitizeCsvCell(`Creator (${t.flow})`)},${sanitizeCsvCell(t.category)},${sanitizeCsvCell(t.title)},${sanitizeCsvCell(signedAmt)},${sanitizeCsvCell(t.date)},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell("")},${sanitizeCsvCell("")}\n`;
+      const fAmt = (t.currency && t.currency !== appState.settings.currency && t.foreignAmount) ? (isRev ? Number(t.foreignAmount) : -Number(t.foreignAmount)) : "";
+      const fCurr = (t.currency && t.currency !== appState.settings.currency) ? t.currency : "";
+      csvContent += `${sanitizeCsvCell(`Creator (${t.flow})`)},${sanitizeCsvCell(t.category)},${sanitizeCsvCell(t.title)},${sanitizeCsvCell(signedAmt)},${sanitizeCsvCell(t.date)},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell(fAmt)},${sanitizeCsvCell(fCurr)}\n`;
     });
-    appState.freelanceTransactions.forEach(t => {
+    sortByDateDesc(appState.freelanceTransactions).forEach(t => {
       const isInc = t.flow === "income";
       const signedAmt = isInc ? Number(t.amount || 0) : -Number(t.amount || 0);
       const fAmt = (t.currency && t.currency !== appState.settings.currency && t.foreignAmount) ? (isInc ? Number(t.foreignAmount) : -Number(t.foreignAmount)) : "";
@@ -2668,18 +3069,41 @@ document.addEventListener("DOMContentLoaded", async () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `PureTech_Wallet_Ledger_${new Date().toISOString().split("T")[0]}.csv`;
+    a.download = `PureTech_Wallet_Ledger_${getLocalTodayStr()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
     showToast(tr('تم تصدير ملف الإكسيل بنجاح', 'Excel CSV exported successfully', 'Archivo Excel CSV exportado con éxito'));
   });
 
+  window.addEventListener("beforeprint", () => {
+    if (!isPrintMode) {
+      isPrintMode = true;
+      renderAll();
+    }
+  });
+
+  window.addEventListener("afterprint", () => {
+    if (isPrintMode) {
+      isPrintMode = false;
+      renderAll();
+    }
+  });
+
   document.getElementById("btnExportPdf")?.addEventListener("click", () => {
+    isPrintMode = true;
+    renderAll();
     const overviewTab = document.querySelector('[data-tab="tab-overview"]');
     if (overviewTab) overviewTab.click();
     showToast(tr('جاري تجهيز التقرير المالي للطباعة / التصدير كـ PDF...', 'Preparing financial statement for print / PDF...', 'Preparando informe financiero para imprimir / PDF...'), 'info');
     setTimeout(() => {
       window.print();
+      // Safety fallback if browser does not fire afterprint
+      setTimeout(() => {
+        if (isPrintMode) {
+          isPrintMode = false;
+          renderAll();
+        }
+      }, 3500);
     }, 450);
   });
 

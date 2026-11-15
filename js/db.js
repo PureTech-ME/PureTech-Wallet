@@ -10,6 +10,51 @@ const SETTINGS_KEY = "puretech_wallet_settings_v1";
 
 let dbInstance = null;
 
+
+// توليد معرف فريد آمن يمنع التصادم حتى عند الإضافة السريعة أو الاستيراد
+function generateUniqueId(prefix = "id") {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `${prefix}-${crypto.randomUUID().slice(0, 8)}`;
+  }
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+// تشفير رمز الـ PIN بخوارزمية SHA-256 مع Salt ثابت لمنع حفظ الرمز كنص صريح
+async function hashPinCode(pin) {
+  const clean = String(pin || "").trim();
+  if (!clean) return "";
+  if (/^[a-f0-9]{64}$/i.test(clean)) return clean.toLowerCase();
+  const salted = `puretech_v7_salt_${clean}`;
+  try {
+    if (typeof crypto !== "undefined" && crypto.subtle && crypto.subtle.digest) {
+      const msgBuffer = new TextEncoder().encode(salted);
+      const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+      const hashArray = Array.from(new Uint8Array(hashBuffer));
+      return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+    }
+  } catch (e) {
+    // fallback if non-secure context
+  }
+  // Fallback deterministic hash if subtle crypto unavailable
+  let h1 = 0xdeadbeef ^ salted.length, h2 = 0x41c6ce57 ^ salted.length;
+  for (let i = 0, ch; i < salted.length; i++) {
+    ch = salted.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(64, "0");
+}
+
+// دالة مساعدة للحصول على التاريخ المحلي بصيغة YYYY-MM-DD بدقة دون انزياح التوقيت العالمي UTC
+function getLocalTodayStr(dateObj = new Date()) {
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, "0");
+  const d = String(dateObj.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 // الكشف الذكي عن لغة جهاز المتصفح (الإنجليزية عالمياً، العربية لأجهزة الناطقين بالعربية، والإسبانية)
 function detectInitialLanguage() {
   try {
@@ -86,6 +131,68 @@ function getDefaultCleanState() {
     },
     freelanceTransactions: []
   };
+}
+
+
+// القواميس الافتراضية للمسمى الوظيفي والتصنيفات المبدئية لترجمتها تلقائياً عند تغيير اللغة إذا لم يعدلها المستخدم
+const DEFAULT_LOCALIZED_PRESETS = {
+  roles: {
+    ar: "مهندس برمجيات / عمل حر",
+    en: "Software Engineer / Freelancer",
+    es: "Ingeniero de Software / Freelance"
+  },
+  freelanceIncome: {
+    ar: ["تطوير برمجيات ومواقع", "تصميم واجهات UI/UX", "استشارات ودعم تقني", "عقود عمل حر بالساعة"],
+    en: ["Software & Web Development", "UI/UX Design", "Consulting & Tech Support", "Hourly Freelance Contracts"],
+    es: ["Desarrollo de Software y Web", "Diseño UI/UX", "Consultoría y Soporte Técnico", "Contratos Freelance por Hora"]
+  },
+  freelanceExpense: {
+    ar: ["استضافة وسيرفرات سحابية", "اشتراكات برمجيات وذكاء اصطناعي", "عمولات منصات العمل الحر", "معدات وتراخيص"],
+    en: ["Cloud Hosting & Servers", "Software & AI Subscriptions", "Freelance Platform Fees", "Hardware & Licenses"],
+    es: ["Hosting y Servidores Cloud", "Suscripciones de Software e IA", "Comisiones de Plataformas Freelance", "Equipamiento y Licencias"]
+  },
+  personalIncome: {
+    ar: ["مكافآت وحوافز", "عوائد استثمارات", "أعمال إضافية", "أخرى"],
+    en: ["Bonuses & Incentives", "Investment Returns", "Side Gigs", "Other"],
+    es: ["Bonos e Incentivos", "Rendimientos de Inversión", "Trabajos Adicionales", "Otros"]
+  },
+  personalExpense: {
+    ar: ["فواتير وخدمات منزلية", "أقساط والتزامات تمويلية", "رعاية صحية وتأمين", "تعليم وتدريب", "صيانة ومواصلات"],
+    en: ["Bills & Utilities", "Installments & Loan Payments", "Healthcare & Insurance", "Education & Training", "Maintenance & Transport"],
+    es: ["Facturas y Servicios del Hogar", "Cuotas y Compromisos Financieros", "Salud y Seguros", "Educación y Formación", "Mantenimiento y Transporte"]
+  }
+};
+
+function syncDefaultLocalizedStrings(state, targetLang) {
+  if (!state || !["ar", "en", "es"].includes(targetLang)) return;
+  const allRoles = Object.values(DEFAULT_LOCALIZED_PRESETS.roles);
+  if (allRoles.includes(state.settings?.freelanceRole)) {
+    state.settings.freelanceRole = DEFAULT_LOCALIZED_PRESETS.roles[targetLang];
+  }
+
+  const translateArrayIfDefault = (arr, presetGroup) => {
+    if (!Array.isArray(arr)) return;
+    const targetList = presetGroup[targetLang];
+    const langs = ["ar", "en", "es"];
+    return arr.map((item) => {
+      for (const l of langs) {
+        const idx = presetGroup[l].indexOf(item);
+        if (idx !== -1 && targetList[idx]) {
+          return targetList[idx];
+        }
+      }
+      return item;
+    });
+  };
+
+  if (state.freelanceCats) {
+    state.freelanceCats.income = translateArrayIfDefault(state.freelanceCats.income, DEFAULT_LOCALIZED_PRESETS.freelanceIncome);
+    state.freelanceCats.expense = translateArrayIfDefault(state.freelanceCats.expense, DEFAULT_LOCALIZED_PRESETS.freelanceExpense);
+  }
+  if (state.customPersonalCats) {
+    state.customPersonalCats.income = translateArrayIfDefault(state.customPersonalCats.income, DEFAULT_LOCALIZED_PRESETS.personalIncome);
+    state.customPersonalCats.expense = translateArrayIfDefault(state.customPersonalCats.expense, DEFAULT_LOCALIZED_PRESETS.personalExpense);
+  }
 }
 
 function getSampleState() {
@@ -195,7 +302,7 @@ function sanitizeState(raw) {
     if (typeof val === "string" && /^\d{4}-\d{2}-\d{2}/.test(val)) {
       return val.substring(0, 10);
     }
-    return new Date().toISOString().split("T")[0];
+    return getLocalTodayStr();
   };
 
   const sanitizeList = (list, validator) => {
@@ -243,7 +350,7 @@ function sanitizeState(raw) {
     if (!name) return null;
     const qty = cleanNumber(item.quantity, 1, 0);
     const unitPrice = cleanNumber(item.unitPrice, 0, 0);
-    const purchasePrice = cleanNumber(item.purchasePrice, unitPrice, 0);
+    const purchasePrice = (item.purchasePrice !== undefined && item.purchasePrice !== null && item.purchasePrice !== '') ? cleanNumber(item.purchasePrice, unitPrice, 0) : unitPrice;
     return {
       id: cleanId(item.id, `ast-${Date.now()}-${idx}`),
       name,
@@ -278,7 +385,10 @@ function sanitizeState(raw) {
       category: cleanString(item.category, "other"),
       title: title || "Creator Tx",
       amount,
-      date: cleanDate(item.date)
+      date: cleanDate(item.date),
+      currency: cleanString(item.currency) || undefined,
+      foreignAmount: cleanNumber(item.foreignAmount) || undefined,
+      exchangeRate: cleanNumber(item.exchangeRate) || undefined
     };
   });
 
@@ -323,9 +433,9 @@ function sanitizeState(raw) {
       pinCode: cleanString(raw.settings?.pinCode)
     },
     rates: {
-      usd: cleanNumber(raw.rates?.usd, def.rates.usd, 0.01),
-      eur: cleanNumber(raw.rates?.eur, def.rates.eur, 0.01),
-      gold: cleanNumber(raw.rates?.gold, def.rates.gold, 1),
+      usd: cleanNumber(raw.rates?.usd, def.rates.usd, 0.0001),
+      eur: cleanNumber(raw.rates?.eur, def.rates.eur, 0.0001),
+      gold: cleanNumber(raw.rates?.gold, def.rates.gold, 0.01),
       lastSyncDate: cleanString(raw.rates?.lastSyncDate),
       lastSyncTime: cleanString(raw.rates?.lastSyncTime)
     },
@@ -429,7 +539,7 @@ async function loadStoredState() {
           await persistCleanState(fresh);
           return fresh;
         }
-        return mergeWithDefaultState(result);
+        return await ensureHashedPinState(mergeWithDefaultState(result));
       }
     }
   } catch (e) {
@@ -445,13 +555,24 @@ async function loadStoredState() {
         await persistCleanState(fresh);
         return fresh;
       }
-      return mergeWithDefaultState(parsed);
+      return await ensureHashedPinState(mergeWithDefaultState(parsed));
     }
   } catch (e) {
     console.warn("localStorage read fallback:", e);
   }
 
   return getDefaultCleanState();
+}
+
+async function ensureHashedPinState(state) {
+  if (state && state.settings && state.settings.pinCode) {
+    const rawPin = String(state.settings.pinCode).trim();
+    if (/^\d{4}$/.test(rawPin)) {
+      state.settings.pinCode = await hashPinCode(rawPin);
+      await persistCleanState(state);
+    }
+  }
+  return state;
 }
 
 async function persistState() {

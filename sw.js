@@ -1,9 +1,9 @@
 /**
- * PureTech Wallet - Progressive Web App (PWA) Offline Service Worker
- * Ensures 100% offline access by caching core assets and third-party CDNs
+ * PureTech Wallet V7 - Progressive Web App (PWA) Offline Service Worker
+ * Ensures 100% offline access by pre-caching core assets and third-party CDNs from first install
  */
 
-const CACHE_NAME = "puretech-wallet-cache-v18";
+const CACHE_NAME = "puretech-wallet-cache-v23";
 const STATIC_ASSETS = [
   "./",
   "./index.html",
@@ -21,11 +21,36 @@ const STATIC_ASSETS = [
   "./icons/icon-512.svg"
 ];
 
-// Install Event - Pre-cache core files
+const CDN_ASSETS = [
+  "https://cdn.tailwindcss.com",
+  "https://cdn.jsdelivr.net/npm/chart.js@4.4.1",
+  "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css",
+  "https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700;800;900&family=Inter:wght@400;500;600;700;800&display=swap"
+];
+
+// Install Event - Pre-cache core local files & best-effort pre-cache CDN libraries
 self.addEventListener("install", (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(STATIC_ASSETS);
+    caches.open(CACHE_NAME).then(async (cache) => {
+      await cache.addAll(STATIC_ASSETS);
+      // Pre-cache CDN assets individually so an offline/CORS hiccup on one never aborts SW install
+      await Promise.allSettled(
+        CDN_ASSETS.map(async (cdnUrl) => {
+          try {
+            let res;
+            try {
+              res = await fetch(cdnUrl);
+            } catch (_) {
+              res = await fetch(new Request(cdnUrl, { mode: "no-cors" }));
+            }
+            if (res && (res.status === 200 || res.type === "opaque")) {
+              await cache.put(cdnUrl, res);
+            }
+          } catch (e) {
+            // Silently ignore if offline during install
+          }
+        })
+      );
     }).then(() => self.skipWaiting())
   );
 });
@@ -66,7 +91,7 @@ self.addEventListener("fetch", (event) => {
   // All other resources (Local files + CDNs: Tailwind, FontAwesome, Chart.js, Google Fonts):
   // Cache First, falling back to network, then caching new CDN responses for future offline use
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
+    caches.match(event.request, { ignoreSearch: true }).then((cachedResponse) => {
       if (cachedResponse) {
         return cachedResponse;
       }
@@ -92,4 +117,3 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
-

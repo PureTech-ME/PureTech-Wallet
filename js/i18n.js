@@ -201,10 +201,17 @@ const i18n = {
     pin_saved: "تم تحديث إعدادات الأمان وقفل المحفظة",
     pin_disabled: "تم إلغاء قفل الـ PIN",
     btn_forgot_pin: "نسيت رمز المرور؟",
-    confirm_reset_pin_title: "إعادة ضبط قفل المحفظة",
-    confirm_reset_pin_msg: "هل نسيت رمز PIN؟ سيتم إلغاء تفعيل القفل واستعادة الوصول إلى المحفظة فوراً. هل تود المتابعة؟",
+    confirm_reset_pin_title: "إعادة ضبط المصنع وإلغاء القفل",
+    confirm_reset_pin_msg: "لحماية خصوصيتك المالية، إعادة ضبط رمز الـ PIN المفقود ستقوم بمسح البيانات المحلية وإعادة المحفظة لحالتها النظيفة (يمكنك استعادة نسختك الاحتياطية JSON لاحقاً). هل تود المتابعة؟",
     label_tx_currency: "عملة المعاملة:",
-    currency_converted_info: "يعادل بالعملة الأساسية:"
+    currency_converted_info: "يعادل بالعملة الأساسية:",
+    chart_trends_sub: "آخر 6 أشهر",
+    personal_custom_income_cats: "تصنيفات الدخل المخصصة",
+    personal_custom_expense_cats: "تصنيفات الالتزامات المخصصة",
+    convert_currency_title: "تحويل المبالغ للعملة الجديدة",
+    convert_currency_msg: "هل ترغب في تحويل وتقييم كافة المعاملات والأصول المسجلة من ({old}) إلى ({new}) تلقائياً حسب سعر الصرف؟ (اختر إلغاء إذا كنت تريد تغيير رمز العملة فقط مع بقاء الأرقام كما هي)",
+    runway_deficit: "0 شهور (عجز سيولة)",
+    pin_protected_placeholder: "•••• (محمي)" 
   },
   en: {
     badge_offline: "100% Offline Local",
@@ -404,10 +411,17 @@ const i18n = {
     pin_saved: "Security settings and PIN updated",
     pin_disabled: "PIN lock disabled",
     btn_forgot_pin: "Forgot PIN?",
-    confirm_reset_pin_title: "Reset Wallet Lock",
-    confirm_reset_pin_msg: "Forgot your PIN? This will disable the PIN lock and restore wallet access. Proceed?",
+    confirm_reset_pin_title: "Factory Reset & Unlock Wallet",
+    confirm_reset_pin_msg: "For your financial privacy, resetting a forgotten PIN will wipe local data and reset the wallet to a clean state (you can restore your JSON backup afterward). Proceed?",
     label_tx_currency: "Transaction Currency:",
-    currency_converted_info: "Base Currency Equivalent:"
+    currency_converted_info: "Base Currency Equivalent:",
+    chart_trends_sub: "Last 6 Months",
+    personal_custom_income_cats: "Custom Income Categories",
+    personal_custom_expense_cats: "Custom Expense Categories",
+    convert_currency_title: "Convert Existing Amounts",
+    convert_currency_msg: "Would you like to automatically convert all logged transactions and assets from ({old}) to ({new}) using the exchange rate? (Cancel to keep raw numbers unchanged)",
+    runway_deficit: "0 Months (Cash Deficit)",
+    pin_protected_placeholder: "•••• (Protected)" 
   },
   es: {
     badge_offline: "100% Local Fuera de Línea",
@@ -607,10 +621,17 @@ const i18n = {
     pin_saved: "Configuración de seguridad y PIN guardada",
     pin_disabled: "Bloqueo con PIN deshabilitado",
     btn_forgot_pin: "¿Olvidó su PIN?",
-    confirm_reset_pin_title: "Restablecer Bloqueo de Billetera",
-    confirm_reset_pin_msg: "¿Olvidó su PIN? Esto desactivará el bloqueo por PIN y restaurará el acceso a la billetera. ¿Continuar?",
+    confirm_reset_pin_title: "Restablecimiento de Fábrica y Desbloqueo",
+    confirm_reset_pin_msg: "Por su privacidad financiera, restablecer un PIN olvidado borrará los datos locales y reiniciará la billetera (puede restaurar su copia JSON después). ¿Continuar?",
     label_tx_currency: "Moneda de transacción:",
-    currency_converted_info: "Equivalente en moneda base:"
+    currency_converted_info: "Equivalente en moneda base:",
+    chart_trends_sub: "Últimos 6 Meses",
+    personal_custom_income_cats: "Categorías de Ingresos Personalizadas",
+    personal_custom_expense_cats: "Categorías de Gastos Personalizadas",
+    convert_currency_title: "Convertir Montos Existentes",
+    convert_currency_msg: "¿Desea convertir automáticamente todas las transacciones y activos registrados de ({old}) a ({new}) según la tasa de cambio? (Cancelar para mantener los números sin cambios)",
+    runway_deficit: "0 Meses (Déficit de Liquidez)",
+    pin_protected_placeholder: "•••• (Protegido)" 
   }
 };
 
