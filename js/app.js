@@ -128,6 +128,7 @@ const paginationState = {
   creatorTxPage: 1,
   freelanceTxPage: 1,
   assetsPage: 1,
+  projectsPage: 1,
   selectedPeriod: "all"
 };
 
@@ -137,6 +138,7 @@ window.changePaginationPage = function(target, page) {
   else if (target === "creatorTx") paginationState.creatorTxPage = page;
   else if (target === "freelanceTx") paginationState.freelanceTxPage = page;
   else if (target === "assets") paginationState.assetsPage = page;
+  else if (target === "projects") paginationState.projectsPage = page;
   renderAll();
 };
 
@@ -234,9 +236,14 @@ function calculateFinancials() {
 
   let allTimeCreatorRev = 0;
   let allTimeCreatorExp = 0;
+  let creatorPendingRev = 0;
   appState.creatorTransactions.forEach((tx) => {
-    if (tx.flow === "revenue") allTimeCreatorRev += Number(tx.amount || 0);
-    else allTimeCreatorExp += Number(tx.amount || 0);
+    if (tx.flow === "revenue") {
+      if (tx.status === "pending") creatorPendingRev += Number(tx.amount || 0);
+      else allTimeCreatorRev += Number(tx.amount || 0);
+    } else {
+      if (tx.status !== "pending") allTimeCreatorExp += Number(tx.amount || 0);
+    }
   });
   const allTimeCreatorNet = allTimeCreatorRev - allTimeCreatorExp;
 
@@ -246,6 +253,7 @@ function calculateFinancials() {
   let creatorRev = 0;
   let creatorExp = 0;
   periodCreatorTx.forEach((tx) => {
+    if (tx.status === "pending") return;
     if (tx.flow === "revenue") creatorRev += Number(tx.amount || 0);
     else creatorExp += Number(tx.amount || 0);
   });
@@ -253,9 +261,21 @@ function calculateFinancials() {
 
   let allTimeFreelanceRev = 0;
   let allTimeFreelanceExp = 0;
+  let freelancePendingRev = 0;
   appState.freelanceTransactions.forEach((tx) => {
-    if (tx.flow === "income") allTimeFreelanceRev += Number(tx.amount || 0);
-    else allTimeFreelanceExp += Number(tx.amount || 0);
+    if (tx.flow === "income") {
+      if (tx.status === "pending") freelancePendingRev += Number(tx.amount || 0);
+      else allTimeFreelanceRev += Number(tx.amount || 0);
+    } else {
+      if (tx.status !== "pending") allTimeFreelanceExp += Number(tx.amount || 0);
+    }
+  });
+
+  // Include received Freelance Project milestone payments in Freelance Inflow
+  (appState.freelanceProjects || []).forEach((prj) => {
+    (prj.payments || []).forEach((pmt) => {
+      allTimeFreelanceRev += Number(pmt.amount || 0);
+    });
   });
   const allTimeFreelanceNet = allTimeFreelanceRev - allTimeFreelanceExp;
 
@@ -265,8 +285,16 @@ function calculateFinancials() {
   let freelanceRev = 0;
   let freelanceExp = 0;
   periodFreelanceTx.forEach((tx) => {
+    if (tx.status === "pending") return;
     if (tx.flow === "income") freelanceRev += Number(tx.amount || 0);
     else freelanceExp += Number(tx.amount || 0);
+  });
+  (appState.freelanceProjects || []).forEach((prj) => {
+    (prj.payments || []).forEach((pmt) => {
+      if (!isPeriodFiltered || (pmt.date || "").startsWith(selectedPeriod)) {
+        freelanceRev += Number(pmt.amount || 0);
+      }
+    });
   });
   const freelanceNet = freelanceRev - freelanceExp;
 
@@ -312,7 +340,48 @@ function calculateFinancials() {
     }
   });
 
-  const totalNetWorth = liquidCash + totalAssetsValue;
+  // Debts & Installments Impact
+  let totalOwedByMe = 0;
+  let totalOwedToMe = 0;
+  (appState.debts || []).forEach((d) => {
+    const rem = Math.max(0, Number(d.totalAmount || 0) - Number(d.paidAmount || 0));
+    if (d.direction === "owed_to_me") totalOwedToMe += rem;
+    else totalOwedByMe += rem;
+  });
+
+  const totalNetWorth = liquidCash + totalAssetsValue - totalOwedByMe;
+
+  // Month-over-Month (MoM) Insights Calculation
+  const nowDate = new Date();
+  const curYM = isPeriodFiltered ? selectedPeriod : getLocalTodayStr(nowDate).slice(0, 7);
+  const [cy, cm] = curYM.split("-").map(Number);
+  const prevDateObj = new Date(cy, (cm || 1) - 2, 1);
+  const prevYM = `${prevDateObj.getFullYear()}-${String(prevDateObj.getMonth() + 1).padStart(2, "0")}`;
+
+  const sumByMonth = (list, ym, pred = () => true) =>
+    list.filter(i => (i.date || "").startsWith(ym) && pred(i)).reduce((s, i) => s + Number(i.amount || 0), 0);
+
+  const curMoInc = sumByMonth(appState.personalIncomes, curYM);
+  const prevMoInc = sumByMonth(appState.personalIncomes, prevYM);
+  const curMoExp = sumByMonth(appState.personalObligations, curYM);
+  const prevMoExp = sumByMonth(appState.personalObligations, prevYM);
+
+  const calcOnlineMo = (ym) => {
+    const cRev = sumByMonth(appState.creatorTransactions, ym, t => t.flow === "revenue" && t.status !== "pending");
+    const cExp = sumByMonth(appState.creatorTransactions, ym, t => t.flow === "expense" && t.status !== "pending");
+    const fRev = sumByMonth(appState.freelanceTransactions, ym, t => t.flow === "income" && t.status !== "pending");
+    const fExp = sumByMonth(appState.freelanceTransactions, ym, t => t.flow === "expense" && t.status !== "pending");
+    let pRev = 0;
+    (appState.freelanceProjects || []).forEach(p => { pRev += sumByMonth(p.payments || [], ym); });
+    return (cRev - cExp) + (fRev + pRev - fExp);
+  };
+  const curMoOnline = calcOnlineMo(curYM);
+  const prevMoOnline = calcOnlineMo(prevYM);
+
+  const pctDelta = (cur, prev) => (prev > 0 ? (((cur - prev) / prev) * 100) : null);
+  const incomeMoM = pctDelta(curMoInc, prevMoInc);
+  const obligationsMoM = pctDelta(curMoExp, prevMoExp);
+  const onlineMoM = pctDelta(curMoOnline, prevMoOnline);
 
   // Financial Health Intelligence Indicators
   const savingsRate = personalIncome > 0 ? ((personalNet / personalIncome) * 100) : 0;
@@ -358,7 +427,14 @@ function calculateFinancials() {
     assetValues,
     totalNetWorth,
     savingsRate,
-    runwayMonths
+    runwayMonths,
+    totalOwedByMe,
+    totalOwedToMe,
+    creatorPendingRev,
+    freelancePendingRev,
+    incomeMoM,
+    obligationsMoM,
+    onlineMoM
   };
 }
 
@@ -391,6 +467,35 @@ function trackOperationAndRemind() {
     showToast(dict.backup_reminder_msg || "Remember to export a backup!", "info");
     userOperationsCounter = 0;
   }
+}
+
+function updateThemeUI() {
+  const isLight = appState?.settings?.theme === "light";
+  const htmlEl = document.documentElement;
+  const icon = document.getElementById("iconThemeToggle");
+  if (isLight) {
+    htmlEl.classList.remove("dark");
+    htmlEl.classList.add("light-theme");
+    if (icon) icon.className = "fa-solid fa-moon text-xs text-indigo-600";
+  } else {
+    htmlEl.classList.remove("light-theme");
+    htmlEl.classList.add("dark");
+    if (icon) icon.className = "fa-solid fa-sun text-xs text-amber-400";
+  }
+}
+
+function formatMoMBadge(elId, pct, invertGood = false) {
+  const el = document.getElementById(elId);
+  if (!el) return;
+  if (pct === null || pct === undefined || isNaN(pct)) {
+    el.textContent = "";
+    return;
+  }
+  const sign = pct >= 0 ? "+" : "";
+  const arrow = pct >= 0 ? "▲" : "▼";
+  const isGood = invertGood ? pct <= 0 : pct >= 0;
+  el.className = `text-[10px] font-mono font-bold ${isGood ? "text-emerald-400" : "text-rose-400"}`;
+  el.textContent = `${arrow} ${sign}${pct.toFixed(1)}% ${tr("عن الشهر السابق", "MoM", "MoM")}`;
 }
 
 function updatePrivacyUI() {
@@ -430,6 +535,13 @@ function updateLanguageUI() {
     }
   });
 
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-title");
+    if (dict[key]) {
+      el.setAttribute("title", dict[key]);
+    }
+  });
+
   document.querySelectorAll(".lang-btn").forEach((btn) => {
     if (btn.getAttribute("data-lang") === lang) {
       btn.className = "lang-btn px-2.5 py-1 text-xs font-bold rounded-md transition-all bg-brand-500 text-white shadow-sm";
@@ -458,6 +570,7 @@ function updateLanguageUI() {
       : "••••";
   }
 
+  updateThemeUI();
   updatePrivacyUI();
   updateOnlineStatusUI();
 }
@@ -491,9 +604,16 @@ function renderAll() {
   }
 
   document.getElementById("kpiNetWorth").textContent = formatMoney(data.totalNetWorth);
+  const debtBadgeEl = document.getElementById("kpiNetWorthDebtBadge");
+  if (debtBadgeEl) {
+    debtBadgeEl.textContent = data.totalOwedByMe > 0 ? `(-${formatMoney(data.totalOwedByMe)} ${tr('ديون', 'Debts', 'Deudas')})` : "";
+  }
   document.getElementById("kpiLiquidity").textContent = formatMoney(data.liquidCash);
   document.getElementById("kpiAssetsValue").textContent = formatMoney(data.totalAssetsValue);
   document.getElementById("kpiOnlineEarnings").textContent = formatMoney(data.allTimeOnlineNet);
+  formatMoMBadge("kpiOnlineMoM", data.onlineMoM, false);
+  formatMoMBadge("eqIncomeMoM", data.incomeMoM, false);
+  formatMoMBadge("eqObligationsMoM", data.obligationsMoM, true);
 
   // Financial Health Intelligence Indicators
   const dict = i18n[lang] || i18n.en;
@@ -550,6 +670,7 @@ function renderAll() {
     appState.personalObligations.forEach(o => { if (o.date) rawMonths.add(o.date.substring(0, 7)); });
     appState.creatorTransactions.forEach(t => { if (t.date) rawMonths.add(t.date.substring(0, 7)); });
     appState.freelanceTransactions.forEach(t => { if (t.date) rawMonths.add(t.date.substring(0, 7)); });
+    (appState.freelanceProjects || []).forEach(p => (p.payments || []).forEach(pmt => { if (pmt.date) rawMonths.add(pmt.date.substring(0, 7)); }));
     const currentYearMonth = getLocalTodayStr().substring(0, 7);
     rawMonths.add(currentYearMonth);
 
@@ -882,6 +1003,8 @@ function renderAll() {
   document.getElementById("creatorNetProfit").textContent = formatMoney(data.creatorNet);
   const margin = data.creatorRev > 0 ? ((data.creatorNet / data.creatorRev) * 100).toFixed(1) : 0;
   document.getElementById("creatorProfitMargin").textContent = `${tr('هامش الربح', 'Margin', 'Margen')}: ${margin}%`;
+  const cPendEl = document.getElementById("creatorPendingBadge");
+  if (cPendEl) cPendEl.textContent = data.creatorPendingRev > 0 ? `${tr("قيد التحصيل:", "Pending:", "Pendiente:")} ${formatMoney(data.creatorPendingRev)}` : "";
 
   const chnGrid = document.getElementById("channelsGrid");
   if (appState.channels.length === 0) {
@@ -899,6 +1022,7 @@ function renderAll() {
         : appState.creatorTransactions.filter(t => t.channelId === chn.id);
 
       periodChannelTx.forEach(t => {
+        if (t.status === "pending") return;
         if (t.flow === "revenue") cRev += Number(t.amount || 0);
         else {
           cExp += Number(t.amount || 0);
@@ -1026,7 +1150,7 @@ function renderAll() {
                 <span>•</span>
                 <span>${escapeHtml(catLabel)}</span>
                 <span>•</span>
-                <span>${tx.date}</span>
+                <span>${tx.date}</span>${tx.status === "pending" ? `<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-bold">${tr("قيد التحصيل", "Pending", "Pendiente")}</span>` : ""}
               </div>
             </div>
           </div>
@@ -1054,6 +1178,8 @@ function renderAll() {
   document.getElementById("flTotalIncome").textContent = formatMoney(data.freelanceRev);
   document.getElementById("flTotalExpenses").textContent = formatMoney(data.freelanceExp);
   document.getElementById("flNetProfit").textContent = formatMoney(data.freelanceNet);
+  const fPendEl = document.getElementById("flPendingBadge");
+  if (fPendEl) fPendEl.textContent = data.freelancePendingRev > 0 ? `${tr("قيد التحصيل:", "Pending:", "Pendiente:")} ${formatMoney(data.freelancePendingRev)}` : "";
 
   const flIncBadgeContainer = document.getElementById("flIncomeCatsBadges");
   flIncBadgeContainer.innerHTML = appState.freelanceCats.income.map((cat, idx) => `
@@ -1109,7 +1235,7 @@ function renderAll() {
               <h5 class="font-bold text-white">${escapeHtml(tx.title)}</h5>
               <div class="flex items-center gap-2 text-[10px] text-slate-400 mt-0.5">
                 <span class="bg-dark-950 px-1.5 py-0.5 rounded border border-slate-800">${escapeHtml(tx.category)}</span>
-                <span>${tx.date}</span>
+                <span>${tx.date}</span>${tx.status === "pending" ? `<span class="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[9px] font-bold">${tr("قيد التحصيل", "Pending", "Pendiente")}</span>` : ""}
               </div>
             </div>
           </div>
@@ -1133,12 +1259,200 @@ function renderAll() {
   }
   renderPagination("freelanceTxPagination", "freelanceTx", paginationState.freelanceTxPage, flTotal, flPageSize);
 
+
+  // Render Debts & Installments
+  const owedByMeEl = document.getElementById("totalOwedByMe");
+  const owedToMeEl = document.getElementById("totalOwedToMe");
+  const netDebtEl = document.getElementById("netDebtImpact");
+  if (owedByMeEl) owedByMeEl.textContent = formatMoney(data.totalOwedByMe);
+  if (owedToMeEl) owedToMeEl.textContent = formatMoney(data.totalOwedToMe);
+  if (netDebtEl) netDebtEl.textContent = formatMoney(data.totalOwedToMe - data.totalOwedByMe);
+
+  const debtsListEl = document.getElementById("debtsList");
+  if (debtsListEl) {
+    const debts = appState.debts || [];
+    if (debts.length === 0) {
+      debtsListEl.innerHTML = `<div class="col-span-full p-6 text-center text-xs text-slate-500">${tr('لا توجد ديون أو أقساط مسجلة حالياً', 'No debts or installments logged yet', 'No hay deudas registradas aún')}</div>`;
+    } else {
+      debtsListEl.innerHTML = debts.map(d => {
+        const rem = Math.max(0, Number(d.totalAmount || 0) - Number(d.paidAmount || 0));
+        const pct = d.totalAmount > 0 ? Math.min(100, Math.round((d.paidAmount / d.totalAmount) * 100)) : 0;
+        const remInst = Math.max(0, Number(d.totalInstallments || 1) - Number(d.paidInstallments || 0));
+        const isOwedToMe = d.direction === "owed_to_me";
+        return `
+          <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 space-y-3">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <span class="text-[10px] px-2 py-0.5 rounded-full font-bold ${isOwedToMe ? 'bg-emerald-500/15 text-emerald-400' : 'bg-rose-500/15 text-rose-400'}">
+                  ${isOwedToMe ? tr('مستحق لك (+)', 'Owed To You (+)', 'Por Cobrar (+)') : tr('التزام عليك (-)', 'Owed By You (-)', 'Por Pagar (-)')}
+                </span>
+                <h5 class="text-xs font-bold text-white mt-1.5">${escapeHtml(d.title)}</h5>
+                ${d.party ? `<p class="text-[11px] text-slate-400">${escapeHtml(d.party)}</p>` : ''}
+              </div>
+              <div class="flex items-center gap-1">
+                ${rem > 0 ? `<button onclick="payDebtInstallment('${d.id}')" class="px-2 py-1 rounded bg-brand-500/20 hover:bg-brand-500 text-brand-300 hover:text-white text-[10px] font-bold transition-all" title="${tr('سداد قسط', 'Pay Installment', 'Pagar Cuota')}"><i class="fa-solid fa-check"></i> ${tr('قسط', 'Pay', 'Pagar')}</button>` : ''}
+                <button onclick="openEditDebtModal('${d.id}')" class="text-slate-500 hover:text-brand-400 p-1"><i class="fa-solid fa-pen-to-square text-xs"></i></button>
+                <button onclick="deleteDebt('${d.id}')" class="text-slate-500 hover:text-rose-400 p-1"><i class="fa-solid fa-trash-can text-xs"></i></button>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-center bg-dark-950 p-2 rounded-lg border border-slate-800 text-[11px] font-mono">
+              <div><span class="text-slate-400 block text-[10px]">${tr('الإجمالي', 'Total', 'Total')}</span><strong class="text-white">${formatMoney(d.totalAmount)}</strong></div>
+              <div><span class="text-slate-400 block text-[10px]">${tr('المدفوع', 'Paid', 'Pagado')}</span><strong class="text-emerald-400">${formatMoney(d.paidAmount)}</strong></div>
+              <div><span class="text-slate-400 block text-[10px]">${tr('المتبقي', 'Remaining', 'Restante')}</span><strong class="text-rose-400">${formatMoney(rem)}</strong></div>
+            </div>
+            <div class="space-y-1">
+              <div class="flex justify-between text-[10px] text-slate-400 font-mono">
+                <span>${tr('الأقساط المتبقية:', 'Remaining Installments:', 'Cuotas restantes:')} <strong class="text-white">${remInst} / ${d.totalInstallments}</strong></span>
+                <span>${pct}%</span>
+              </div>
+              <div class="w-full bg-dark-950 h-2 rounded-full overflow-hidden border border-slate-800">
+                <div class="h-full ${isOwedToMe ? 'bg-emerald-500' : 'bg-rose-500'} rounded-full" style="width:${pct}%"></div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    }
+  }
+
+  // Render Savings Goals
+  const goalsGridEl = document.getElementById("savingsGoalsGrid");
+  if (goalsGridEl) {
+    const goals = appState.savingsGoals || [];
+    if (goals.length === 0) {
+      goalsGridEl.innerHTML = `<div class="col-span-full p-6 text-center text-xs text-slate-500">${tr('لا توجد أهداف ادخار مسجلة بعد', 'No savings goals created yet', 'No hay metas de ahorro aún')}</div>`;
+    } else {
+      goalsGridEl.innerHTML = goals.map(g => {
+        const pct = g.targetAmount > 0 ? Math.min(100, Math.round((g.savedAmount / g.targetAmount) * 100)) : 0;
+        const rem = Math.max(0, Number(g.targetAmount || 0) - Number(g.savedAmount || 0));
+        return `
+          <div class="bg-dark-900 border border-slate-800 rounded-xl p-4 space-y-3">
+            <div class="flex items-start justify-between">
+              <div>
+                <h5 class="text-xs font-bold text-white">${escapeHtml(g.title)}</h5>
+                ${g.targetDate ? `<span class="text-[10px] text-slate-400 font-mono">${g.targetDate}</span>` : ''}
+              </div>
+              <div class="flex items-center gap-1">
+                <button onclick="openEditGoalModal('${g.id}')" class="text-slate-500 hover:text-emerald-400 p-1"><i class="fa-solid fa-pen-to-square text-xs"></i></button>
+                <button onclick="deleteGoal('${g.id}')" class="text-slate-500 hover:text-rose-400 p-1"><i class="fa-solid fa-trash-can text-xs"></i></button>
+              </div>
+            </div>
+            <div class="flex justify-between items-baseline text-xs font-mono">
+              <span class="text-emerald-400 font-bold">${formatMoney(g.savedAmount)}</span>
+              <span class="text-slate-400 text-[11px]">/ ${formatMoney(g.targetAmount)} (${pct}%)</span>
+            </div>
+            <div class="w-full bg-dark-950 h-2.5 rounded-full overflow-hidden border border-slate-800">
+              <div class="h-full bg-emerald-500 rounded-full transition-all" style="width:${pct}%"></div>
+            </div>
+            <div class="text-[10px] text-slate-400 font-mono">${tr('المتبقي للهدف:', 'Remaining:', 'Restante:')} <strong class="text-slate-200">${formatMoney(rem)}</strong></div>
+          </div>
+        `;
+      }).join("");
+    }
+  }
+
+  // Render Freelance Projects & Milestone Payments (with Search, Status Filter, Archive & Pagination)
+  const projectsGridEl = document.getElementById("freelanceProjectsGrid");
+  if (projectsGridEl) {
+    const allProjects = appState.freelanceProjects || [];
+    const prjQuery = (document.getElementById("searchProjectsInput")?.value || "").trim().toLowerCase();
+    const prjFilter = document.getElementById("projectStatusFilter")?.value || "active";
+
+    const filteredProjects = allProjects.filter(prj => {
+      const collectedAgreed = (prj.payments || []).reduce((s, p) => s + Number(p.agreedEquivalent || 0), 0);
+      const isCompleted = Number(prj.agreedAmount || 0) > 0 && (Number(prj.agreedAmount) - collectedAgreed) <= 0.01;
+      const isArchived = Boolean(prj.archived);
+      if (prjFilter === "active" && (isCompleted || isArchived)) return false;
+      if (prjFilter === "completed" && (!isCompleted || isArchived)) return false;
+      if (prjFilter === "archived" && !isArchived) return false;
+      if (prjQuery) {
+        return (prj.title || "").toLowerCase().includes(prjQuery) || (prj.description || "").toLowerCase().includes(prjQuery);
+      }
+      return true;
+    });
+
+    const prjPageSize = isPrintMode ? Math.max(1, filteredProjects.length) : 6;
+    const prjTotal = filteredProjects.length;
+    const prjTotalPages = Math.max(1, Math.ceil(prjTotal / prjPageSize));
+    if (paginationState.projectsPage > prjTotalPages) paginationState.projectsPage = prjTotalPages;
+    const prjStart = (paginationState.projectsPage - 1) * prjPageSize;
+    const pagedProjects = filteredProjects.slice(prjStart, prjStart + prjPageSize);
+
+    if (filteredProjects.length === 0) {
+      projectsGridEl.innerHTML = `<div class="col-span-full p-6 text-center text-xs text-slate-500">${
+        allProjects.length === 0
+          ? tr('لا توجد مشاريع مستقلة مسجلة حالياً', 'No freelance projects logged yet', 'No hay proyectos freelance aún')
+          : tr('لا توجد مشاريع مطابقة للتصفية أو البحث', 'No matching projects for this filter', 'No hay proyectos que coincidan')
+      }</div>`;
+    } else {
+      projectsGridEl.innerHTML = pagedProjects.map(prj => {
+        const pCurr = prj.currency || appState.settings.currency;
+        const payments = prj.payments || [];
+        const collectedAgreed = payments.reduce((s, p) => s + Number(p.agreedEquivalent || 0), 0);
+        const collectedBase = payments.reduce((s, p) => s + Number(p.amount || 0), 0);
+        const remainingAgreed = Math.max(0, Number(prj.agreedAmount || 0) - collectedAgreed);
+        const isCompleted = Number(prj.agreedAmount || 0) > 0 && remainingAgreed <= 0.01;
+        const pct = prj.agreedAmount > 0 ? Math.min(100, Math.round((collectedAgreed / prj.agreedAmount) * 100)) : 0;
+        const pmtRate = pCurr === "USD" ? (Number(appState.rates.usd) || 1) : (pCurr === "EUR" ? (Number(appState.rates.eur) || 1) : 1);
+        const remainingBase = pCurr === appState.settings.currency ? remainingAgreed : (remainingAgreed * pmtRate);
+
+        const pmtsHtml = payments.map(pmt => `
+          <div class="flex items-center justify-between text-[11px] bg-dark-950 px-2.5 py-1.5 rounded border border-slate-800">
+            <div>
+              <span class="text-slate-300 font-semibold">${pmt.date}</span>
+              ${pmt.note ? `<span class="text-slate-500 ms-1.5">• ${escapeHtml(pmt.note)}</span>` : ''}
+            </div>
+            <div class="flex items-center gap-2 font-mono">
+              <span class="text-emerald-400 font-bold">+${formatMoney(pmt.amount)}</span>
+              ${(pmt.currency && pmt.currency !== appState.settings.currency && pmt.foreignAmount) ? `<span class="text-[10px] text-slate-400">(${pmt.foreignAmount} ${pmt.currency})</span>` : ''}
+              <button onclick="deleteProjectPayment('${prj.id}', '${pmt.id}')" class="text-slate-600 hover:text-rose-400"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+          </div>
+        `).join("");
+
+        return `
+          <div class="bg-dark-900 border ${isCompleted ? 'border-emerald-500/30' : 'border-slate-800'} rounded-xl p-4 space-y-3">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h5 class="text-xs font-bold text-white">${escapeHtml(prj.title)}</h5>
+                  ${isCompleted ? `<span class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 text-[10px] font-bold">${tr('مكتمل 100%', 'Completed', 'Completado')}</span>` : ''}
+                </div>
+                ${prj.description ? `<p class="text-[11px] text-slate-400 mt-0.5">${escapeHtml(prj.description)}</p>` : ''}
+              </div>
+              <div class="flex items-center gap-1">
+                ${!isCompleted ? `<button onclick="openProjectPaymentModal('${prj.id}')" class="px-2 py-1 rounded bg-brand-500/20 hover:bg-brand-500 text-brand-300 hover:text-white text-[10px] font-bold transition-all"><i class="fa-solid fa-plus"></i> ${tr('دفعة', 'Payment', 'Pago')}</button>` : ''}
+                <button onclick="toggleArchiveProject('${prj.id}')" class="text-slate-500 hover:text-amber-400 p-1" title="${prj.archived ? tr('إلغاء الأرشفة', 'Unarchive', 'Desarchivar') : tr('أرشفة', 'Archive', 'Archivar')}"><i class="fa-solid ${prj.archived ? 'fa-box-open' : 'fa-box-archive'} text-xs"></i></button>
+                <button onclick="deleteFreelanceProject('${prj.id}')" class="text-slate-500 hover:text-rose-400 p-1"><i class="fa-solid fa-trash-can text-xs"></i></button>
+              </div>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-center bg-dark-950 p-2 rounded-lg border border-slate-800 text-[11px] font-mono">
+              <div><span class="text-slate-400 block text-[10px]">${tr('المتفق عليه', 'Agreed', 'Acordado')}</span><strong class="text-white">${Number(prj.agreedAmount).toLocaleString("en-US")} ${pCurr}</strong></div>
+              <div><span class="text-slate-400 block text-[10px]">${tr('المحصّل', 'Collected', 'Cobrado')}</span><strong class="text-emerald-400">${collectedAgreed.toLocaleString("en-US", {maximumFractionDigits: 2})} ${pCurr}</strong><span class="block text-[9px] text-slate-500">${formatMoney(collectedBase)}</span></div>
+              <div><span class="text-slate-400 block text-[10px]">${tr('المتبقي', 'Remaining', 'Restante')}</span><strong class="${isCompleted ? 'text-emerald-400' : 'text-amber-400'}">${remainingAgreed.toLocaleString("en-US", {maximumFractionDigits: 2})} ${pCurr}</strong><span class="block text-[9px] text-slate-500">≈ ${formatMoney(remainingBase)}</span></div>
+            </div>
+            <div class="w-full bg-dark-950 h-2 rounded-full overflow-hidden border border-slate-800">
+              <div class="h-full ${isCompleted ? 'bg-emerald-500' : 'bg-brand-500'} rounded-full" style="width:${pct}%"></div>
+            </div>
+            ${pmtsHtml ? `<div class="space-y-1.5 pt-1">${pmtsHtml}</div>` : ''}
+          </div>
+        `;
+      }).join("");
+    }
+    renderPagination("projectsPagination", "projects", paginationState.projectsPage, prjTotal, prjPageSize);
+  }
+
   renderCharts(data);
 }
 
 // Chart.js Visualization Controllers
 function renderCharts(data) {
   const lang = appState.settings.lang;
+  const isLight = appState?.settings?.theme === "light";
+  const chartTickColor = isLight ? "#475569" : "#94a3b8";
+  const chartLegendColor = isLight ? "#1e293b" : "#cbd5e1";
+  const chartGridColor = isLight ? "rgba(15, 23, 42, 0.08)" : "rgba(255, 255, 255, 0.05)";
+  const doughnutBorder = isLight ? "#ffffff" : "#0f172a";
 
   const doughnutCtx = document.getElementById("wealthDoughnutChart")?.getContext("2d");
   if (doughnutCtx) {
@@ -1173,6 +1487,7 @@ function renderCharts(data) {
     if (wealthChart) {
       wealthChart.data.labels = labels;
       wealthChart.data.datasets[0].data = values;
+      wealthChart.data.datasets[0].borderColor = doughnutBorder;
       wealthChart.update();
     } else {
       wealthChart = new Chart(doughnutCtx, {
@@ -1182,7 +1497,7 @@ function renderCharts(data) {
           datasets: [{
             data: values,
             backgroundColor: colors,
-            borderColor: '#0f172a',
+            borderColor: doughnutBorder,
             borderWidth: 2,
             hoverOffset: 6
           }]
@@ -1241,6 +1556,10 @@ function renderCharts(data) {
       pillarsChart.data.datasets[0].data = inflows;
       pillarsChart.data.datasets[1].label = tr('الالتزامات والمصاريف', 'Outflow', 'Gastos');
       pillarsChart.data.datasets[1].data = outflows;
+      pillarsChart.options.scales.x.ticks.color = chartTickColor;
+      pillarsChart.options.scales.y.ticks.color = chartTickColor;
+      pillarsChart.options.scales.y.grid.color = chartGridColor;
+      pillarsChart.options.plugins.legend.labels.color = chartLegendColor;
       pillarsChart.update();
     } else {
       pillarsChart = new Chart(barCtx, {
@@ -1268,12 +1587,12 @@ function renderCharts(data) {
           scales: {
             x: {
               grid: { display: false },
-              ticks: { color: '#94a3b8', font: { size: 11 } }
+              ticks: { color: chartTickColor, font: { size: 11 } }
             },
             y: {
-              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              grid: { color: chartGridColor },
               ticks: {
-                color: '#94a3b8',
+                color: chartTickColor,
                 font: { size: 10, family: 'Inter' },
                 callback: function(val) {
                   return appState?.settings?.privacyMode ? '•••' : val.toLocaleString('en-US');
@@ -1283,7 +1602,7 @@ function renderCharts(data) {
           },
           plugins: {
             legend: {
-              labels: { color: '#cbd5e1', font: { size: 11, weight: 'bold' } }
+              labels: { color: chartLegendColor, font: { size: 11, weight: 'bold' } }
             },
             tooltip: {
               callbacks: {
@@ -1336,6 +1655,10 @@ function renderCharts(data) {
       trendsChart.data.datasets[1].label = lang === 'ar' ? 'الالتزامات (-)' : lang === 'es' ? 'Obligaciones (-)' : 'Obligations (-)';
       trendsChart.data.datasets[2].data = trendNet;
       trendsChart.data.datasets[2].label = lang === 'ar' ? 'صافي الفائض' : lang === 'es' ? 'Superávit neto' : 'Net Surplus';
+      trendsChart.options.scales.x.ticks.color = chartTickColor;
+      trendsChart.options.scales.y.ticks.color = chartTickColor;
+      trendsChart.options.scales.y.grid.color = chartGridColor;
+      trendsChart.options.plugins.legend.labels.color = chartLegendColor;
       trendsChart.update();
     } else {
       trendsChart = new Chart(trendsCtx, {
@@ -1374,12 +1697,12 @@ function renderCharts(data) {
           scales: {
             x: {
               grid: { display: false },
-              ticks: { color: '#94a3b8', font: { size: 11, family: 'Inter' } }
+              ticks: { color: chartTickColor, font: { size: 11, family: 'Inter' } }
             },
             y: {
-              grid: { color: 'rgba(255, 255, 255, 0.05)' },
+              grid: { color: chartGridColor },
               ticks: {
-                color: '#94a3b8',
+                color: chartTickColor,
                 font: { size: 10, family: 'Inter' },
                 callback: function(val) {
                   return appState?.settings?.privacyMode ? '•••' : val.toLocaleString('en-US');
@@ -1389,7 +1712,7 @@ function renderCharts(data) {
           },
           plugins: {
             legend: {
-              labels: { color: '#cbd5e1', font: { size: 11, weight: 'bold' } }
+              labels: { color: chartLegendColor, font: { size: 11, weight: 'bold' } }
             },
             tooltip: {
               callbacks: {
@@ -1867,7 +2190,10 @@ document.addEventListener("DOMContentLoaded", async () => {
       appState.personalObligations.length > 0 ||
       appState.assets.length > 0 ||
       appState.creatorTransactions.length > 0 ||
-      appState.freelanceTransactions.length > 0
+      appState.freelanceTransactions.length > 0 ||
+      (appState.debts && appState.debts.length > 0) ||
+      (appState.savingsGoals && appState.savingsGoals.length > 0) ||
+      (appState.freelanceProjects && appState.freelanceProjects.length > 0)
     );
 
     let shouldConvert = false;
@@ -1949,6 +2275,39 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (appState.monthlyBudget && appState.monthlyBudget.amount > 0) {
         appState.monthlyBudget.amount = scaleVal(appState.monthlyBudget.amount);
       }
+      (appState.debts || []).forEach(d => {
+        d.totalAmount = scaleVal(d.totalAmount);
+        d.paidAmount = scaleVal(d.paidAmount);
+      });
+      (appState.savingsGoals || []).forEach(g => {
+        g.targetAmount = scaleVal(g.targetAmount);
+        g.savedAmount = scaleVal(g.savedAmount);
+      });
+      (appState.freelanceProjects || []).forEach(prj => {
+        if (prj.currency !== "USD" && prj.currency !== "EUR") {
+          prj.agreedAmount = scaleVal(prj.agreedAmount);
+          prj.currency = newCurr;
+        }
+        (prj.payments || []).forEach(pmt => {
+          if ((pmt.currency === "USD" || pmt.currency === "EUR") && pmt.foreignAmount) {
+            if (newCurr === pmt.currency) {
+              pmt.amount = Number(Number(pmt.foreignAmount).toFixed(2));
+              pmt.exchangeRate = 1;
+            } else {
+              const r = pmt.currency === "USD" ? (Number(appState.rates.usd) || 1) : (Number(appState.rates.eur) || 1);
+              pmt.exchangeRate = r;
+              pmt.amount = Number((Number(pmt.foreignAmount) * r).toFixed(2));
+            }
+          } else {
+            pmt.amount = scaleVal(pmt.amount);
+            pmt.currency = newCurr;
+            pmt.exchangeRate = 1;
+          }
+          if (prj.currency !== "USD" && prj.currency !== "EUR") {
+            pmt.agreedEquivalent = pmt.amount;
+          }
+        });
+      });
     }
 
     await persistState();
@@ -2608,6 +2967,8 @@ document.addEventListener("DOMContentLoaded", async () => {
     creatorFlowSelect.value = tx.flow;
     populateCreatorCats();
     creatorCatSelect.value = tx.category;
+    const cStatEl = document.getElementById("creatorTxStatusSelect");
+    if (cStatEl) cStatEl.value = tx.status || "paid";
     document.getElementById("creatorTxTitleInput").value = tx.title;
     const currSelect = document.getElementById("creatorTxCurrencySelect");
     if ((tx.currency === "USD" || tx.currency === "EUR") && tx.currency !== appState.settings.currency && tx.foreignAmount) {
@@ -2633,6 +2994,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     document.getElementById("creatorTxEditId").value = "";
     document.getElementById("creatorTxFlowSelect").value = "revenue";
+    const cStatEl = document.getElementById("creatorTxStatusSelect");
+    if (cStatEl) cStatEl.value = "paid";
     populateCreatorCats();
     document.getElementById("creatorTxTitleInput").value = "";
     document.getElementById("creatorTxAmountInput").value = "";
@@ -2650,6 +3013,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     const editId = document.getElementById("creatorTxEditId").value;
     const channelId = document.getElementById("creatorTxChannelSelect").value;
     const flow = creatorFlowSelect.value;
+    const status = document.getElementById("creatorTxStatusSelect")?.value === "pending" ? "pending" : "paid";
     const category = creatorCatSelect.value;
     const title = document.getElementById("creatorTxTitleInput").value.trim();
     const rawAmount = parseFloat(document.getElementById("creatorTxAmountInput").value);
@@ -2685,6 +3049,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       if (tx) {
         tx.channelId = channelId;
         tx.flow = flow;
+        tx.status = status;
         tx.category = category;
         tx.title = title;
         tx.amount = finalBaseAmount;
@@ -2699,6 +3064,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         id: generateUniqueId('ctx'),
         channelId,
         flow,
+        status,
         category,
         title,
         amount: finalBaseAmount,
@@ -2773,6 +3139,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     document.getElementById("flTxEditId").value = tx.id;
     flFlowSelect.value = tx.flow || "income";
+    const flStatEl = document.getElementById("flTxStatusSelect");
+    if (flStatEl) flStatEl.value = tx.status || "paid";
     populateFreelanceCats(tx.category);
     document.getElementById("flTxTitleInput").value = tx.title || "";
     const currSelect = document.getElementById("flTxCurrencySelect");
@@ -2795,6 +3163,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     document.getElementById("flTxEditId").value = "";
     flFlowSelect.value = "income";
+    const flStatEl = document.getElementById("flTxStatusSelect");
+    if (flStatEl) flStatEl.value = "paid";
     populateFreelanceCats();
     document.getElementById("flTxTitleInput").value = "";
     document.getElementById("flTxAmountInput").value = "";
@@ -2811,6 +3181,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     e.preventDefault();
     const editId = document.getElementById("flTxEditId").value;
     const flow = flFlowSelect.value;
+    const status = document.getElementById("flTxStatusSelect")?.value === "pending" ? "pending" : "paid";
     const category = flCatSelect.value || tr("عام", "General", "General");
     const title = document.getElementById("flTxTitleInput").value.trim();
     const rawAmount = parseFloat(document.getElementById("flTxAmountInput").value);
@@ -2845,6 +3216,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const tx = appState.freelanceTransactions.find(t => t.id === editId);
       if (tx) {
         tx.flow = flow;
+        tx.status = status;
         tx.category = category;
         tx.title = title;
         tx.amount = finalBaseAmount;
@@ -2858,6 +3230,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       const tx = {
         id: generateUniqueId('flx'),
         flow,
+        status,
         category,
         title,
         amount: finalBaseAmount,
@@ -3065,6 +3438,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       csvContent += `${sanitizeCsvCell(`Freelance (${t.flow})`)},${sanitizeCsvCell(t.category)},${sanitizeCsvCell(t.title)},${sanitizeCsvCell(signedAmt)},${sanitizeCsvCell(t.date)},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell(fAmt)},${sanitizeCsvCell(fCurr)}\n`;
     });
 
+    (appState.freelanceProjects || []).forEach(prj => {
+      (prj.payments || []).forEach(pmt => {
+        const fAmt = (pmt.currency && pmt.currency !== appState.settings.currency && pmt.foreignAmount) ? pmt.foreignAmount : "";
+        const fCurr = (pmt.currency && pmt.currency !== appState.settings.currency) ? pmt.currency : "";
+        csvContent += `${sanitizeCsvCell("Freelance Project Payment")},${sanitizeCsvCell(prj.title)},${sanitizeCsvCell(pmt.note || "Milestone Payment")},${sanitizeCsvCell(pmt.amount)},${sanitizeCsvCell(pmt.date)},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell(fAmt)},${sanitizeCsvCell(fCurr)}\n`;
+      });
+    });
+    (appState.debts || []).forEach(d => {
+      const rem = Math.max(0, Number(d.totalAmount || 0) - Number(d.paidAmount || 0));
+      csvContent += `${sanitizeCsvCell(`Debt (${d.direction})`)},${sanitizeCsvCell(d.party || "General")},${sanitizeCsvCell(d.title)},${sanitizeCsvCell(d.direction === "owed_by_me" ? -rem : rem)},${sanitizeCsvCell(d.dueDate || "")},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell("")},${sanitizeCsvCell("")}\n`;
+    });
+    (appState.savingsGoals || []).forEach(g => {
+      csvContent += `${sanitizeCsvCell("Savings Goal")},${sanitizeCsvCell(`Target: ${g.targetAmount}`)},${sanitizeCsvCell(g.title)},${sanitizeCsvCell(g.savedAmount)},${sanitizeCsvCell(g.targetDate || "")},${sanitizeCsvCell(appState.settings.currency)},${sanitizeCsvCell("")},${sanitizeCsvCell("")}\n`;
+    });
+
     const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -3138,7 +3526,494 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  document.getElementById("btnOpenClearConfirm").addEventListener("click", async () => {
+
+  // Theme Toggle Listener
+  document.getElementById("btnToggleTheme")?.addEventListener("click", async () => {
+    appState.settings.theme = appState.settings.theme === "light" ? "dark" : "light";
+    updateThemeUI();
+    renderCharts(calculateFinancials());
+    await persistState();
+  });
+
+  // Debts & Installments Controllers
+  const debtModal = document.getElementById("debtModal");
+  document.getElementById("btnOpenAddDebt")?.addEventListener("click", () => {
+    document.getElementById("debtEditId").value = "";
+    document.getElementById("debtDirectionSelect").value = "owed_by_me";
+    document.getElementById("debtTitleInput").value = "";
+    document.getElementById("debtPartyInput").value = "";
+    document.getElementById("debtTotalInput").value = "";
+    document.getElementById("debtPaidInput").value = "0";
+    document.getElementById("debtTotalInstInput").value = "1";
+    document.getElementById("debtPaidInstInput").value = "0";
+    document.getElementById("debtDueDateInput").value = getLocalTodayStr();
+    debtModal?.classList.remove("hidden");
+  });
+
+  window.openEditDebtModal = function(id) {
+    const d = (appState.debts || []).find(x => x.id === id);
+    if (!d) return;
+    document.getElementById("debtEditId").value = d.id;
+    document.getElementById("debtDirectionSelect").value = d.direction || "owed_by_me";
+    document.getElementById("debtTitleInput").value = d.title || "";
+    document.getElementById("debtPartyInput").value = d.party || "";
+    document.getElementById("debtTotalInput").value = d.totalAmount;
+    document.getElementById("debtPaidInput").value = d.paidAmount;
+    document.getElementById("debtTotalInstInput").value = d.totalInstallments || 1;
+    document.getElementById("debtPaidInstInput").value = d.paidInstallments || 0;
+    document.getElementById("debtDueDateInput").value = d.dueDate || "";
+    debtModal?.classList.remove("hidden");
+  };
+
+  window.payDebtInstallment = async function(id) {
+    const d = (appState.debts || []).find(x => x.id === id);
+    if (!d) return;
+    const remAmt = Math.max(0, Number(d.totalAmount) - Number(d.paidAmount));
+    const remInst = Math.max(1, Number(d.totalInstallments || 1) - Number(d.paidInstallments || 0));
+    const oneInstallment = Number((remAmt / remInst).toFixed(2));
+    d.paidAmount = Math.min(Number(d.totalAmount), Number((Number(d.paidAmount) + oneInstallment).toFixed(2)));
+    d.paidInstallments = Math.min(Number(d.totalInstallments || 1), Number(d.paidInstallments || 0) + 1);
+    await persistState();
+    renderAll();
+    showToast(tr('تم تسجيل سداد القسط بنجاح', 'Installment paid successfully', 'Cuota pagada con éxito'));
+  };
+
+  window.deleteDebt = async function(id) {
+    const ok = await requestConfirmation(tr('حذف الدين', 'Delete Debt', 'Eliminar Deuda'), tr('هل أنت متأكد من حذف هذا السجل؟', 'Delete this debt record?', '¿Eliminar este registro?'));
+    if (ok) {
+      appState.debts = (appState.debts || []).filter(d => d.id !== id);
+      await persistState();
+      renderAll();
+      showToast(tr('تم الحذف', 'Deleted', 'Eliminado'));
+    }
+  };
+
+  document.getElementById("debtForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!appState.debts) appState.debts = [];
+    const editId = document.getElementById("debtEditId").value;
+    const totalAmount = parseFloat(document.getElementById("debtTotalInput").value) || 0;
+    const paidAmount = Math.min(totalAmount, parseFloat(document.getElementById("debtPaidInput").value) || 0);
+    const totalInstallments = Math.max(1, parseInt(document.getElementById("debtTotalInstInput").value, 10) || 1);
+    const paidInstallments = Math.min(totalInstallments, Math.max(0, parseInt(document.getElementById("debtPaidInstInput").value, 10) || 0));
+    const item = {
+      id: editId || generateUniqueId("dbt"),
+      direction: document.getElementById("debtDirectionSelect").value,
+      title: document.getElementById("debtTitleInput").value.trim(),
+      party: document.getElementById("debtPartyInput").value.trim(),
+      totalAmount,
+      paidAmount,
+      totalInstallments,
+      paidInstallments,
+      dueDate: document.getElementById("debtDueDateInput").value
+    };
+    if (editId) {
+      const idx = appState.debts.findIndex(x => x.id === editId);
+      if (idx !== -1) appState.debts[idx] = item;
+    } else {
+      appState.debts.unshift(item);
+    }
+    await persistState();
+    trackOperationAndRemind();
+    debtModal?.classList.add("hidden");
+    renderAll();
+    showToast(tr('تم حفظ سجل الدين بنجاح', 'Debt saved successfully', 'Deuda guardada con éxito'));
+  });
+
+  // Savings Goals Controllers
+  const goalModal = document.getElementById("goalModal");
+  document.getElementById("btnOpenAddGoal")?.addEventListener("click", () => {
+    document.getElementById("goalEditId").value = "";
+    document.getElementById("goalTitleInput").value = "";
+    document.getElementById("goalTargetInput").value = "";
+    document.getElementById("goalSavedInput").value = "0";
+    document.getElementById("goalDateInput").value = getLocalTodayStr();
+    goalModal?.classList.remove("hidden");
+  });
+
+  window.openEditGoalModal = function(id) {
+    const g = (appState.savingsGoals || []).find(x => x.id === id);
+    if (!g) return;
+    document.getElementById("goalEditId").value = g.id;
+    document.getElementById("goalTitleInput").value = g.title;
+    document.getElementById("goalTargetInput").value = g.targetAmount;
+    document.getElementById("goalSavedInput").value = g.savedAmount;
+    document.getElementById("goalDateInput").value = g.targetDate || "";
+    goalModal?.classList.remove("hidden");
+  };
+
+  window.deleteGoal = async function(id) {
+    const ok = await requestConfirmation(tr('حذف الهدف', 'Delete Goal', 'Eliminar Meta'), tr('هل تريد حذف هدف الادخار هذا؟', 'Delete this savings goal?', '¿Eliminar esta meta?'));
+    if (ok) {
+      appState.savingsGoals = (appState.savingsGoals || []).filter(g => g.id !== id);
+      await persistState();
+      renderAll();
+      showToast(tr('تم حذف الهدف', 'Goal deleted', 'Meta eliminada'));
+    }
+  };
+
+  document.getElementById("goalForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!appState.savingsGoals) appState.savingsGoals = [];
+    const editId = document.getElementById("goalEditId").value;
+    const item = {
+      id: editId || generateUniqueId("gol"),
+      title: document.getElementById("goalTitleInput").value.trim(),
+      targetAmount: parseFloat(document.getElementById("goalTargetInput").value) || 0,
+      savedAmount: parseFloat(document.getElementById("goalSavedInput").value) || 0,
+      targetDate: document.getElementById("goalDateInput").value
+    };
+    if (editId) {
+      const idx = appState.savingsGoals.findIndex(x => x.id === editId);
+      if (idx !== -1) appState.savingsGoals[idx] = item;
+    } else {
+      appState.savingsGoals.unshift(item);
+    }
+    await persistState();
+    trackOperationAndRemind();
+    goalModal?.classList.add("hidden");
+    renderAll();
+    showToast(tr('تم حفظ هدف الادخار', 'Savings goal saved', 'Meta de ahorro guardada'));
+  });
+
+  // Freelance Projects & Milestone Payments Controllers
+  const projectModal = document.getElementById("projectModal");
+  const pmtModal = document.getElementById("projectPaymentModal");
+
+  document.getElementById("btnOpenAddProject")?.addEventListener("click", () => {
+    document.getElementById("projectEditId").value = "";
+    document.getElementById("projectTitleInput").value = "";
+    document.getElementById("projectDescInput").value = "";
+    document.getElementById("projectAgreedInput").value = "";
+    const baseOpt = document.getElementById("projectCurrencyBaseOpt");
+    if (baseOpt) baseOpt.textContent = `${appState.settings.currency} (${tr('الأساسية', 'Base', 'Base')})`;
+    document.getElementById("projectCurrencySelect").value = "BASE";
+    projectModal?.classList.remove("hidden");
+  });
+
+  document.getElementById("projectForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!appState.freelanceProjects) appState.freelanceProjects = [];
+    const currSel = document.getElementById("projectCurrencySelect").value;
+    const currency = currSel === "BASE" ? appState.settings.currency : currSel;
+    const item = {
+      id: generateUniqueId("prj"),
+      title: document.getElementById("projectTitleInput").value.trim(),
+      description: document.getElementById("projectDescInput").value.trim(),
+      agreedAmount: parseFloat(document.getElementById("projectAgreedInput").value) || 0,
+      currency,
+      payments: []
+    };
+    appState.freelanceProjects.unshift(item);
+    await persistState();
+    trackOperationAndRemind();
+    projectModal?.classList.add("hidden");
+    renderAll();
+    showToast(tr('تم إنشاء المشروع بنجاح', 'Project created', 'Proyecto creado'));
+  });
+
+  const onProjectsSearch = debounce(() => {
+    paginationState.projectsPage = 1;
+    renderAll();
+  }, 180);
+  document.getElementById("searchProjectsInput")?.addEventListener("input", onProjectsSearch);
+  document.getElementById("projectStatusFilter")?.addEventListener("change", () => {
+    paginationState.projectsPage = 1;
+    renderAll();
+  });
+
+  window.toggleArchiveProject = async function(id) {
+    const prj = (appState.freelanceProjects || []).find(p => p.id === id);
+    if (!prj) return;
+    prj.archived = !prj.archived;
+    await persistState();
+    renderAll();
+    showToast(prj.archived ? tr('تمت أرشفة المشروع', 'Project archived', 'Proyecto archivado') : tr('تمت استعادة المشروع', 'Project unarchived', 'Proyecto restaurado'));
+  };
+
+  window.deleteFreelanceProject = async function(id) {
+    const ok = await requestConfirmation(tr('حذف المشروع', 'Delete Project', 'Eliminar Proyecto'), tr('سيتم حذف المشروع وكافة دفعاته المسجلة!', 'Delete this project and all its payments?', '¿Eliminar este proyecto y sus pagos?'));
+    if (ok) {
+      appState.freelanceProjects = (appState.freelanceProjects || []).filter(p => p.id !== id);
+      await persistState();
+      renderAll();
+      showToast(tr('تم حذف المشروع', 'Project deleted', 'Proyecto eliminado'));
+    }
+  };
+
+  window.deleteProjectPayment = async function(prjId, pmtId) {
+    const prj = (appState.freelanceProjects || []).find(p => p.id === prjId);
+    if (!prj) return;
+    prj.payments = (prj.payments || []).filter(pm => pm.id !== pmtId);
+    await persistState();
+    renderAll();
+    showToast(tr('تم حذف الدفعة', 'Payment deleted', 'Pago eliminado'));
+  };
+
+  function updatePmtConversionPreview() {
+    const prjId = document.getElementById("pmtProjectId").value;
+    const prj = (appState.freelanceProjects || []).find(p => p.id === prjId);
+    const amt = parseFloat(document.getElementById("pmtAmountInput").value);
+    const currSel = document.getElementById("pmtCurrencySelect").value;
+    const previewEl = document.getElementById("pmtRatePreview");
+    if (!prj || !previewEl || isNaN(amt) || amt <= 0) {
+      previewEl?.classList.add("hidden");
+      return;
+    }
+    const recCurr = currSel === "BASE" ? appState.settings.currency : currSel;
+    const recRate = recCurr === appState.settings.currency ? 1 : (recCurr === "USD" ? (Number(appState.rates.usd) || 1) : (Number(appState.rates.eur) || 1));
+    const baseAmt = amt * recRate;
+    const agreedCurr = prj.currency || appState.settings.currency;
+    const agreedRate = agreedCurr === appState.settings.currency ? 1 : (agreedCurr === "USD" ? (Number(appState.rates.usd) || 1) : (Number(appState.rates.eur) || 1));
+    const agreedEq = recCurr === agreedCurr ? amt : (baseAmt / agreedRate);
+    previewEl.textContent = `${tr('المكافئ بالسيولة:', 'Base:', 'Base:')} ${formatMoney(baseAmt, true)} | ${tr('يُخصم من عقد المشروع:', 'Project Credit:', 'Abono al proyecto:')} ${agreedEq.toLocaleString("en-US", {maximumFractionDigits: 2})} ${agreedCurr}`;
+    previewEl.classList.remove("hidden");
+  }
+
+  document.getElementById("pmtAmountInput")?.addEventListener("input", updatePmtConversionPreview);
+  document.getElementById("pmtCurrencySelect")?.addEventListener("change", updatePmtConversionPreview);
+
+  window.openProjectPaymentModal = function(prjId) {
+    const prj = (appState.freelanceProjects || []).find(p => p.id === prjId);
+    if (!prj) return;
+    document.getElementById("pmtProjectId").value = prjId;
+    const baseOpt = document.getElementById("pmtCurrencyBaseOpt");
+    if (baseOpt) baseOpt.textContent = `${appState.settings.currency} (${tr('الأساسية', 'Base', 'Base')})`;
+    document.getElementById("pmtCurrencySelect").value = (prj.currency === "USD" || prj.currency === "EUR") && prj.currency !== appState.settings.currency ? prj.currency : "BASE";
+    document.getElementById("pmtAmountInput").value = "";
+    document.getElementById("pmtDateInput").value = getLocalTodayStr();
+    document.getElementById("pmtNoteInput").value = "";
+    const collected = (prj.payments || []).reduce((s, p) => s + Number(p.agreedEquivalent || 0), 0);
+    const rem = Math.max(0, Number(prj.agreedAmount) - collected);
+    document.getElementById("pmtProjectSummary").textContent = `${prj.title} — ${tr('المتبقي:', 'Remaining:', 'Restante:')} ${rem.toLocaleString("en-US", {maximumFractionDigits: 2})} ${prj.currency}`;
+    document.getElementById("pmtRatePreview")?.classList.add("hidden");
+    pmtModal?.classList.remove("hidden");
+  };
+
+  document.getElementById("projectPaymentForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const prjId = document.getElementById("pmtProjectId").value;
+    const prj = (appState.freelanceProjects || []).find(p => p.id === prjId);
+    if (!prj) return;
+    const rawAmt = parseFloat(document.getElementById("pmtAmountInput").value);
+    if (isNaN(rawAmt) || rawAmt <= 0) return;
+
+    const currSel = document.getElementById("pmtCurrencySelect").value;
+    const recCurr = currSel === "BASE" ? appState.settings.currency : currSel;
+    const recRate = recCurr === appState.settings.currency ? 1 : (recCurr === "USD" ? (Number(appState.rates.usd) || 1) : (Number(appState.rates.eur) || 1));
+    const baseAmt = Number((rawAmt * recRate).toFixed(2));
+    const agreedCurr = prj.currency || appState.settings.currency;
+    const agreedRate = agreedCurr === appState.settings.currency ? 1 : (agreedCurr === "USD" ? (Number(appState.rates.usd) || 1) : (Number(appState.rates.eur) || 1));
+    const agreedEq = recCurr === agreedCurr ? rawAmt : Number((baseAmt / agreedRate).toFixed(2));
+
+    if (!prj.payments) prj.payments = [];
+    prj.payments.push({
+      id: generateUniqueId("pmt"),
+      amount: baseAmt,
+      currency: recCurr,
+      foreignAmount: recCurr !== appState.settings.currency ? rawAmt : undefined,
+      exchangeRate: recRate,
+      agreedEquivalent: agreedEq,
+      date: document.getElementById("pmtDateInput").value,
+      note: document.getElementById("pmtNoteInput").value.trim()
+    });
+    await persistState();
+    trackOperationAndRemind();
+    pmtModal?.classList.add("hidden");
+    renderAll();
+    showToast(tr('تم تسجيل الدفعة وإضافتها لأرباح العمل الحر', 'Payment logged & added to Freelance inflow', 'Pago registrado'));
+  });
+
+  // AES-GCM Encrypted Backup (.PTW)
+  function requestBackupPassword(title, desc) {
+    return new Promise((resolve) => {
+      const modal = document.getElementById("passwordPromptModal");
+      document.getElementById("pwdModalTitle").textContent = title;
+      document.getElementById("pwdModalDesc").textContent = desc;
+      const inp = document.getElementById("pwdPromptInput");
+      inp.value = "";
+      modal.classList.remove("hidden");
+      inp.focus();
+      const form = document.getElementById("pwdPromptForm");
+      const btnCancel = document.getElementById("btnPwdCancel");
+      const done = (val) => {
+        modal.classList.add("hidden");
+        form.onsubmit = null;
+        btnCancel.onclick = null;
+        resolve(val);
+      };
+      form.onsubmit = (e) => { e.preventDefault(); done(inp.value); };
+      btnCancel.onclick = () => done(null);
+    });
+  }
+
+  async function deriveAesKey(password, salt) {
+    const enc = new TextEncoder();
+    const keyMat = await crypto.subtle.importKey("raw", enc.encode(password), "PBKDF2", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name: "PBKDF2", salt, iterations: 100000, hash: "SHA-256" },
+      keyMat,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  document.getElementById("btnExportEncrypted")?.addEventListener("click", async () => {
+    const pwd = await requestBackupPassword(
+      tr('تصدير نسخة مشفرة (AES-GCM)', 'Export Encrypted Backup', 'Exportar Copia Cifrada'),
+      tr('أدخل كلمة مرور قوية لتشفير بياناتك المالية بالكامل:', 'Enter a strong password to encrypt your wallet:', 'Ingrese una contraseña segura:')
+    );
+    if (!pwd) return;
+    try {
+      const salt = crypto.getRandomValues(new Uint8Array(16));
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const key = await deriveAesKey(pwd, salt);
+      const encoded = new TextEncoder().encode(JSON.stringify(appState));
+      const cipher = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, encoded);
+      const b64 = (buf) => {
+        const bytes = new Uint8Array(buf);
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 8192) {
+          binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+        }
+        return btoa(binary);
+      };
+      const payload = { puretech_encrypted: true, v: 9, salt: b64(salt), iv: b64(iv), data: b64(cipher) };
+      const blob = new Blob([JSON.stringify(payload)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `PureTech_Wallet_Encrypted_${getLocalTodayStr()}.ptw`;
+      a.click();
+      URL.revokeObjectURL(url);
+      showToast(tr('تم تصدير النسخة المشفرة بنجاح', 'Encrypted backup exported', 'Copia cifrada exportada'));
+    } catch (err) {
+      showToast(tr('فشل التشفير في هذا المتصفح', 'Encryption failed', 'Error al cifrar'), 'error');
+    }
+  });
+
+  document.getElementById("importEncryptedInput")?.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target.result);
+        if (!parsed.puretech_encrypted) {
+          showToast(tr('ملف غير مشفر - استخدم استعادة JSON العادية', 'Not an encrypted .ptw file', 'Archivo no cifrado'), 'error');
+          return;
+        }
+        const pwd = await requestBackupPassword(
+          tr('فك تشفير النسخة الاحتياطية', 'Decrypt Backup', 'Descifrar Copia'),
+          tr('أدخل كلمة المرور المستخدمة عند التشفير:', 'Enter the backup password:', 'Ingrese la contraseña:')
+        );
+        if (!pwd) return;
+        const fromB64 = (s) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+        const key = await deriveAesKey(pwd, fromB64(parsed.salt));
+        const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv: fromB64(parsed.iv) }, key, fromB64(parsed.data));
+        const rawState = JSON.parse(new TextDecoder().decode(decrypted));
+        appState = typeof mergeWithDefaultState === "function" ? mergeWithDefaultState(rawState) : rawState;
+        if (typeof ensureHashedPinState === "function") appState = await ensureHashedPinState(appState);
+        await persistState();
+        updateLanguageUI();
+        renderAll();
+        checkPinSecurityOnStartup();
+        showToast(tr('تم فك التشفير واستعادة المحفظة بنجاح', 'Wallet decrypted & restored', 'Billetera restaurada con éxito'));
+      } catch (err) {
+        showToast(tr('كلمة المرور غير صحيحة أو الملف تالف', 'Wrong password or corrupted file', 'Contraseña incorrecta'), 'error');
+      } finally {
+        e.target.value = "";
+      }
+    };
+    reader.readAsText(file);
+  });
+
+  // Smart CSV Import Wizard
+  let parsedCsvRows = [];
+  const csvModal = document.getElementById("csvImportModal");
+  document.getElementById("btnOpenCsvImport")?.addEventListener("click", () => {
+    parsedCsvRows = [];
+    document.getElementById("csvFileInput").value = "";
+    document.getElementById("csvPreviewBox")?.classList.add("hidden");
+    document.getElementById("btnConfirmCsvImport").disabled = true;
+    csvModal?.classList.remove("hidden");
+  });
+
+  function parseCsvLine(line) {
+    const res = [];
+    let cur = "", inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const ch = line[i];
+      if (ch === '"') { inQuotes = !inQuotes; }
+      else if (ch === ',' && !inQuotes) { res.push(cur.trim()); cur = ""; }
+      else cur += ch;
+    }
+    res.push(cur.trim());
+    return res;
+  }
+
+  document.getElementById("csvFileInput")?.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const text = String(ev.target.result || "").replace(/^﻿/, "");
+      const lines = text.split(/\r?\n/).filter(l => l.trim());
+      if (lines.length < 2) {
+        showToast(tr('الملف فارغ أو لا يحتوي على صفوف كافية', 'CSV file is empty', 'Archivo CSV vacío'), 'error');
+        return;
+      }
+      const headers = parseCsvLine(lines[0]);
+      parsedCsvRows = lines.slice(1).map(parseCsvLine);
+      const fillCol = (selId, matchIdx) => {
+        const sel = document.getElementById(selId);
+        sel.innerHTML = headers.map((h, i) => `<option value="${i}">${escapeHtml(h || `Col ${i+1}`)}</option>`).join("");
+        sel.value = String(Math.min(headers.length - 1, matchIdx));
+      };
+      fillCol("csvColTitle", Math.max(0, headers.findIndex(h => /desc|title|name|بيان|وصف/i.test(h))));
+      fillCol("csvColAmount", Math.max(0, headers.findIndex(h => /amount|val|مبلغ|قيمة/i.test(h))));
+      fillCol("csvColDate", Math.max(0, headers.findIndex(h => /date|تاريخ/i.test(h))));
+      document.getElementById("csvRowsInfo").textContent = `${parsedCsvRows.length} ${tr('صف جاهز للاستيراد (الموجب = دخل، السالب = التزام)', 'rows ready (Positive = Income, Negative = Obligation)', 'filas listas')}`;
+      document.getElementById("csvPreviewBox")?.classList.remove("hidden");
+      document.getElementById("btnConfirmCsvImport").disabled = false;
+    };
+    reader.readAsText(file);
+  });
+
+  document.getElementById("btnConfirmCsvImport")?.addEventListener("click", async () => {
+    const tIdx = parseInt(document.getElementById("csvColTitle").value, 10);
+    const aIdx = parseInt(document.getElementById("csvColAmount").value, 10);
+    const dIdx = parseInt(document.getElementById("csvColDate").value, 10);
+    let imported = 0;
+    parsedCsvRows.forEach(row => {
+      const title = (row[tIdx] || "").replace(/^'/, "").trim();
+      const rawAmt = parseFloat(String(row[aIdx] || "0").replace(/[^0-9.-]/g, ""));
+      const rawDate = (row[dIdx] || "").trim();
+      const date = /^\d{4}-\d{2}-\d{2}/.test(rawDate) ? rawDate.slice(0, 10) : getLocalTodayStr();
+      if (!title || isNaN(rawAmt) || rawAmt === 0) return;
+      const item = {
+        id: generateUniqueId(rawAmt > 0 ? "inc" : "exp"),
+        title,
+        amount: Math.abs(rawAmt),
+        date,
+        category: "other",
+        currency: appState.settings.currency,
+        foreignAmount: null,
+        exchangeRate: 1
+      };
+      if (rawAmt > 0) appState.personalIncomes.unshift(item);
+      else appState.personalObligations.unshift(item);
+      imported++;
+    });
+    await persistState();
+    trackOperationAndRemind();
+    csvModal?.classList.add("hidden");
+    renderAll();
+    showToast(`${tr('تم استيراد', 'Imported', 'Importadas')} ${imported} ${tr('معاملة بنجاح', 'transactions', 'transacciones')}`);
+  });
+
+    document.getElementById("btnOpenClearConfirm").addEventListener("click", async () => {
     const isAr = appState.settings.lang === 'ar';
     const isEs = appState.settings.lang === 'es';
     const ok = await requestConfirmation(

@@ -223,7 +223,7 @@ La mayoría de las aplicaciones de finanzas personales en el mercado (como Mint,
 puretech-wallet/
 ├── index.html          # Interfaz principal, tarjetas de métricas, modales y pantallas de bloqueo
 ├── manifest.json       # Manifiesto PWA para instalación nativa multiplataforma
-├── sw.js               # Service Worker para funcionamiento 100% Offline (Cache v23 (Pre-cached CDN + Local))
+├── sw.js               # Service Worker para funcionamiento 100% Offline (Cache v25 (Pre-cached CDN + Local))
 ├── css/
 │   └── styles.css      # Estilos visuales, efectos glassmorphism y estilos de impresión PDF
 ├── js/

@@ -86,6 +86,7 @@ function getDefaultCleanState() {
         ? "مهندس برمجيات / عمل حر" 
         : (isEs ? "Ingeniero de Software / Freelance" : "Software Engineer / Freelancer"),
       privacyMode: false,
+      theme: "dark",
       pinEnabled: false,
       pinCode: ""
     },
@@ -129,6 +130,9 @@ function getDefaultCleanState() {
       enabled: false,
       amount: 0
     },
+    debts: [],
+    savingsGoals: [],
+    freelanceProjects: [],
     freelanceTransactions: []
   };
 }
@@ -205,6 +209,7 @@ function getSampleState() {
       autoSyncRates: true,
       freelanceRole: "مهندس برمجيات ومصمم واجهات Full-Stack",
       privacyMode: false,
+      theme: "dark",
       pinEnabled: false,
       pinCode: ""
     },
@@ -259,11 +264,31 @@ function getSampleState() {
       enabled: false,
       amount: 0
     },
+    debts: [
+      { id: "dbt-1", direction: "owed_by_me", title: "تمويل سيارة (أقساط بنكية)", party: "بنك مصر", totalAmount: 240000, paidAmount: 96000, totalInstallments: 30, paidInstallments: 12, dueDate: "2028-05-01" },
+      { id: "dbt-2", direction: "owed_to_me", title: "مستحقات تطوير نظام لمؤسسة", party: "شركة النور للتجارة", totalAmount: 18000, paidAmount: 8000, totalInstallments: 2, paidInstallments: 1, dueDate: "2026-12-01" }
+    ],
+    savingsGoals: [
+      { id: "gol-1", title: "صندوق طوارئ 6 أشهر", targetAmount: 150000, savedAmount: 85000, targetDate: "2027-06-01" },
+      { id: "gol-2", title: "شراء معدات تصوير وإضاءة", targetAmount: 45000, savedAmount: 31500, targetDate: "2027-01-15" }
+    ],
+    freelanceProjects: [
+      {
+        id: "prj-1",
+        title: "برنامج محاسبة متكامل للشركات",
+        description: "تطوير نظام فواتير ومخازن متكامل مع تقارير ضريبية",
+        agreedAmount: 1000,
+        currency: "USD",
+        payments: [
+          { id: "pmt-1", amount: 9700, currency: "USD", foreignAmount: 200, exchangeRate: 48.50, agreedEquivalent: 200, date: "2026-11-01", note: "دفعة مقدمة عند التعاقد" }
+        ]
+      }
+    ],
     freelanceTransactions: [
-      { id: "flx-1", flow: "income", category: "تطوير مواقع ويب (Web Dev)", title: "تسليم المرحلة الأولى لمتجر إلكتروني", amount: 28000, date: "2026-11-02" },
-      { id: "flx-2", flow: "income", category: "تصميم واجهات UI/UX", title: "تصميم نظام تصميم (Design System) لتطبيق", amount: 15000, date: "2026-11-04" },
-      { id: "flx-3", flow: "expense", category: "اشتراكات AI (OpenAI & Claude)", title: "تجديد باقة نماذج الذكاء الاصطناعي", amount: 1950, date: "2026-11-03" },
-      { id: "flx-4", flow: "expense", category: "سيرفرات واستضافة Cloud", title: "استضافة السيرفرات السحابية وقواعد البيانات", amount: 2400, date: "2026-11-04" }
+      { id: "flx-1", flow: "income", status: "paid", category: "تطوير مواقع ويب (Web Dev)", title: "تسليم المرحلة الأولى لمتجر إلكتروني", amount: 28000, date: "2026-11-02" },
+      { id: "flx-2", flow: "income", status: "pending", category: "تصميم واجهات UI/UX", title: "تصميم نظام تصميم (Design System) لتطبيق", amount: 15000, date: "2026-11-04" },
+      { id: "flx-3", flow: "expense", status: "paid", category: "اشتراكات AI (OpenAI & Claude)", title: "تجديد باقة نماذج الذكاء الاصطناعي", amount: 1950, date: "2026-11-03" },
+      { id: "flx-4", flow: "expense", status: "paid", category: "سيرفرات واستضافة Cloud", title: "استضافة السيرفرات السحابية وقواعد البيانات", amount: 2400, date: "2026-11-04" }
     ]
   };
 }
@@ -382,6 +407,7 @@ function sanitizeState(raw) {
       id: cleanId(item.id, `ctx-${Date.now()}-${idx}`),
       channelId: cleanString(item.channelId),
       flow: item.flow === "expense" ? "expense" : "revenue",
+      status: item.status === "pending" ? "pending" : "paid",
       category: cleanString(item.category, "other"),
       title: title || "Creator Tx",
       amount,
@@ -400,6 +426,7 @@ function sanitizeState(raw) {
     return {
       id: cleanId(item.id, `flx-${Date.now()}-${idx}`),
       flow: item.flow === "expense" ? "expense" : "income",
+      status: item.status === "pending" ? "pending" : "paid",
       category: cleanString(item.category, "general"),
       title: title || "Freelance Tx",
       amount,
@@ -407,6 +434,70 @@ function sanitizeState(raw) {
       currency: cleanString(item.currency) || undefined,
       foreignAmount: cleanNumber(item.foreignAmount) || undefined,
       exchangeRate: cleanNumber(item.exchangeRate) || undefined
+    };
+  });
+
+
+  const cleanDebts = sanitizeList(raw.debts, (item, idx) => {
+    if (!item || typeof item !== "object") return null;
+    const title = cleanString(item.title);
+    const totalAmount = cleanNumber(item.totalAmount, 0, 0);
+    if (!title || totalAmount <= 0) return null;
+    return {
+      id: cleanId(item.id, `dbt-${Date.now()}-${idx}`),
+      direction: item.direction === "owed_to_me" ? "owed_to_me" : "owed_by_me",
+      title,
+      party: cleanString(item.party, ""),
+      totalAmount,
+      paidAmount: Math.min(totalAmount, cleanNumber(item.paidAmount, 0, 0)),
+      totalInstallments: Math.max(1, Math.round(cleanNumber(item.totalInstallments, 1, 1))),
+      paidInstallments: Math.max(0, Math.round(cleanNumber(item.paidInstallments, 0, 0))),
+      dueDate: cleanString(item.dueDate) || ""
+    };
+  });
+
+  const cleanSavingsGoals = sanitizeList(raw.savingsGoals, (item, idx) => {
+    if (!item || typeof item !== "object") return null;
+    const title = cleanString(item.title);
+    const targetAmount = cleanNumber(item.targetAmount, 0, 0);
+    if (!title || targetAmount <= 0) return null;
+    return {
+      id: cleanId(item.id, `gol-${Date.now()}-${idx}`),
+      title,
+      targetAmount,
+      savedAmount: cleanNumber(item.savedAmount, 0, 0),
+      targetDate: cleanString(item.targetDate) || ""
+    };
+  });
+
+  const cleanFreelanceProjects = sanitizeList(raw.freelanceProjects, (item, idx) => {
+    if (!item || typeof item !== "object") return null;
+    const title = cleanString(item.title);
+    const agreedAmount = cleanNumber(item.agreedAmount, 0, 0);
+    if (!title || agreedAmount <= 0) return null;
+    const cleanPayments = sanitizeList(item.payments, (p, pIdx) => {
+      if (!p || typeof p !== "object") return null;
+      const amt = cleanNumber(p.amount, 0, 0);
+      if (amt <= 0) return null;
+      return {
+        id: cleanId(p.id, `pmt-${Date.now()}-${pIdx}`),
+        amount: amt,
+        currency: cleanString(p.currency, ""),
+        foreignAmount: cleanNumber(p.foreignAmount, 0, 0) || undefined,
+        exchangeRate: cleanNumber(p.exchangeRate, 1, 0.0001) || 1,
+        agreedEquivalent: cleanNumber(p.agreedEquivalent, amt, 0),
+        date: cleanDate(p.date),
+        note: cleanString(p.note, "")
+      };
+    });
+    return {
+      id: cleanId(item.id, `prj-${Date.now()}-${idx}`),
+      title,
+      description: cleanString(item.description, ""),
+      agreedAmount,
+      currency: cleanString(item.currency, def.settings.currency),
+      archived: Boolean(item.archived),
+      payments: cleanPayments
     };
   });
 
@@ -429,6 +520,7 @@ function sanitizeState(raw) {
       autoSyncRates: raw.settings?.autoSyncRates !== false,
       freelanceRole: cleanString(raw.settings?.freelanceRole, def.settings.freelanceRole),
       privacyMode: Boolean(raw.settings?.privacyMode),
+      theme: raw.settings?.theme === "light" ? "light" : "dark",
       pinEnabled: Boolean(raw.settings?.pinEnabled),
       pinCode: cleanString(raw.settings?.pinCode)
     },
@@ -456,6 +548,9 @@ function sanitizeState(raw) {
       enabled: Boolean(raw.monthlyBudget?.enabled),
       amount: cleanNumber(raw.monthlyBudget?.amount, 0, 0)
     },
+    debts: cleanDebts.length > 0 || Array.isArray(raw.debts) ? cleanDebts : def.debts,
+    savingsGoals: cleanSavingsGoals.length > 0 || Array.isArray(raw.savingsGoals) ? cleanSavingsGoals : def.savingsGoals,
+    freelanceProjects: cleanFreelanceProjects.length > 0 || Array.isArray(raw.freelanceProjects) ? cleanFreelanceProjects : def.freelanceProjects,
     freelanceTransactions: cleanFreelanceTx.length > 0 || Array.isArray(raw.freelanceTransactions) ? cleanFreelanceTx : def.freelanceTransactions
   };
 }

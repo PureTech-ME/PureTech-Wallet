@@ -25,6 +25,10 @@
         }
         document.documentElement.lang = lang;
         document.documentElement.dir = (lang === "ar") ? "rtl" : "ltr";
+        if (parsed && parsed.settings && parsed.settings.theme === "light") {
+          document.documentElement.classList.remove("dark");
+          document.documentElement.classList.add("light-theme");
+        }
       } catch (e) { }
     })();
   </script>
@@ -181,8 +185,13 @@
             class="lang-btn px-2.5 py-1 text-xs font-bold rounded-md transition-all text-slate-300 hover:text-white">ES</button>
         </div>
 
-        <!-- Privacy & Security Quick Actions -->
+        <!-- Privacy, Theme & Security Quick Actions -->
         <div class="flex items-center gap-1.5">
+          <button type="button" id="btnToggleTheme"
+            class="p-2 rounded-lg bg-dark-850 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-xs transition-colors flex items-center justify-center"
+            data-i18n-title="btn_theme_toggle" title="Toggle Light / Dark Theme" aria-label="Toggle Theme">
+            <i id="iconThemeToggle" class="fa-solid fa-sun text-xs text-amber-400"></i>
+          </button>
           <button type="button" id="btnTogglePrivacy"
             class="p-2 rounded-lg bg-dark-850 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-xs transition-colors flex items-center justify-center"
             title="Toggle Privacy Mode" aria-label="Toggle Privacy Mode">
@@ -228,6 +237,11 @@
         class="nav-tab flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap text-slate-400 hover:text-white hover:bg-slate-800/60 border border-transparent">
         <i class="fa-solid fa-laptop-code"></i>
         <span data-i18n="nav_freelance">Freelance Workspace</span>
+      </button>
+      <button data-tab="tab-debts"
+        class="nav-tab flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap text-slate-400 hover:text-white hover:bg-slate-800/60 border border-transparent">
+        <i class="fa-solid fa-hand-holding-dollar"></i>
+        <span data-i18n="nav_debts">Debts & Goals</span>
       </button>
       <button data-tab="tab-settings"
         class="nav-tab flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-bold transition-all whitespace-nowrap text-slate-400 hover:text-white hover:bg-slate-800/60 border border-transparent">
@@ -282,7 +296,7 @@
           <div class="text-2xl sm:text-3xl font-black text-white font-mono tracking-tight" id="kpiNetWorth">0.00</div>
           <p class="text-[11px] text-slate-400 mt-2 flex items-center gap-1">
             <i class="fa-solid fa-circle-check text-brand-400"></i>
-            <span data-i18n="kpi_net_worth_sub">Liquid Cash + Today's Assets</span>
+            <span data-i18n="kpi_net_worth_sub">Liquid Cash + Assets - Debts</span> <span id="kpiNetWorthDebtBadge" class="ms-1 text-[10px] font-mono text-rose-400"></span>
           </p>
         </div>
 
@@ -295,8 +309,7 @@
               <i class="fa-solid fa-money-bill-trend-up text-base"></i>
             </div>
           </div>
-          <div class="text-2xl sm:text-3xl font-black text-emerald-400 font-mono tracking-tight" id="kpiLiquidity">0.00
-          </div>
+          <div class="flex items-baseline gap-2"><div class="text-2xl sm:text-3xl font-black text-emerald-400 font-mono tracking-tight" id="kpiLiquidity">0.00</div><span id="kpiLiquidityMoM" class="text-[10px] font-mono font-bold"></span></div>
           <p class="text-[11px] text-slate-400 mt-2 flex items-center gap-1">
             <i class="fa-solid fa-arrow-right-arrow-left text-emerald-400"></i>
             <span data-i18n="kpi_liquidity_sub">Incomes - Monthly Obligations</span>
@@ -329,8 +342,7 @@
               <i class="fa-solid fa-globe text-base"></i>
             </div>
           </div>
-          <div class="text-2xl sm:text-3xl font-black text-indigo-300 font-mono tracking-tight" id="kpiOnlineEarnings">
-            0.00</div>
+          <div class="flex items-baseline gap-2"><div class="text-2xl sm:text-3xl font-black text-indigo-300 font-mono tracking-tight" id="kpiOnlineEarnings">0.00</div><span id="kpiOnlineMoM" class="text-[10px] font-mono font-bold"></span></div>
           <p class="text-[11px] text-slate-400 mt-2 flex items-center gap-1">
             <i class="fa-solid fa-code text-indigo-400"></i>
             <span data-i18n="kpi_online_work_sub">Creator Hub + Freelance Net</span>
@@ -475,7 +487,7 @@
           <!-- Income Block -->
           <div class="flex-1 min-w-[130px] bg-dark-950/70 p-3 rounded-xl border border-emerald-500/20">
             <span class="text-xs text-slate-400 block" data-i18n="eq_total_income">Total Incomes</span>
-            <span class="text-xl sm:text-2xl font-black text-emerald-400 font-mono" id="eqTotalIncome">0.00</span>
+            <span class="text-xl sm:text-2xl font-black text-emerald-400 font-mono" id="eqTotalIncome">0.00</span> <span id="eqIncomeMoM" class="text-[10px] font-mono font-bold block mt-0.5"></span>
           </div>
 
           <div class="text-2xl font-black text-slate-500 px-1">-</div>
@@ -483,7 +495,7 @@
           <!-- Obligations Block -->
           <div class="flex-1 min-w-[130px] bg-dark-950/70 p-3 rounded-xl border border-rose-500/20">
             <span class="text-xs text-slate-400 block" data-i18n="eq_total_obligations">Monthly Obligations</span>
-            <span class="text-xl sm:text-2xl font-black text-rose-400 font-mono" id="eqTotalObligations">0.00</span>
+            <span class="text-xl sm:text-2xl font-black text-rose-400 font-mono" id="eqTotalObligations">0.00</span> <span id="eqObligationsMoM" class="text-[10px] font-mono font-bold block mt-0.5"></span>
           </div>
 
           <div class="text-2xl font-black text-slate-500 px-1">=</div>
@@ -819,7 +831,7 @@
         <div class="glass-card rounded-2xl p-4 border-l-4 border-l-brand-500">
           <span class="text-xs text-slate-400 font-bold block" data-i18n="creator_net_profit">Net Creator Profit</span>
           <span class="text-2xl font-black text-brand-300 font-mono mt-1 block" id="creatorNetProfit">0.00</span>
-          <span class="text-[11px] text-slate-400" id="creatorProfitMargin">Margin: 0%</span>
+          <div class="flex items-center justify-between text-[11px] text-slate-400 mt-1"><span id="creatorProfitMargin">Margin: 0%</span><span id="creatorPendingBadge" class="text-amber-400 font-mono font-semibold"></span></div>
         </div>
 
       </div>
@@ -925,9 +937,43 @@
           </div>
           <div class="bg-dark-900 p-3 rounded-xl border border-slate-800">
             <span class="text-xs text-slate-400 block" data-i18n="fl_net_profit">Net Freelance Profit</span>
-            <span class="text-xl font-black text-indigo-300 font-mono mt-0.5 block" id="flNetProfit">0.00</span>
+            <div class="flex items-baseline justify-between"><span class="text-xl font-black text-indigo-300 font-mono mt-0.5 block" id="flNetProfit">0.00</span><span id="flPendingBadge" class="text-[10px] font-mono text-amber-400 font-semibold"></span></div>
           </div>
         </div>
+      </div>
+
+      <!-- Freelance Projects & Milestone Payments -->
+      <div class="glass-card rounded-2xl p-5 border border-brand-500/20 space-y-4">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div>
+            <h4 class="font-bold text-sm text-white flex items-center gap-2">
+              <i class="fa-solid fa-diagram-project text-brand-400"></i>
+              <span data-i18n="fl_projects_title">Freelance Projects & Milestone Payments</span>
+            </h4>
+            <p class="text-xs text-slate-400" data-i18n="fl_projects_sub">Log agreed project price and track partial payments with multi-currency accuracy</p>
+          </div>
+          <button type="button" id="btnOpenAddProject"
+            class="px-3 py-1.5 rounded-lg bg-brand-500 hover:bg-brand-600 text-white font-bold text-xs flex items-center gap-1.5 transition-colors shadow-md shadow-brand-500/20">
+            <i class="fa-solid fa-folder-plus"></i>
+            <span data-i18n="btn_add_project">New Project</span>
+          </button>
+        </div>
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="relative flex-1 min-w-[180px]">
+            <i class="fa-solid fa-magnifying-glass absolute start-3 top-2.5 text-slate-500 text-xs"></i>
+            <input type="text" id="searchProjectsInput" data-i18n-placeholder="search_placeholder"
+              placeholder="Search projects..."
+              class="w-full bg-dark-900 border border-slate-800 rounded-lg py-1.5 ps-8 pe-3 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-brand-500">
+          </div>
+          <select id="projectStatusFilter" class="bg-dark-900 text-xs text-slate-300 rounded-lg px-2.5 py-1.5 border border-slate-700">
+            <option value="active">قيد التنفيذ / Active</option>
+            <option value="completed">مكتمل 100% / Completed</option>
+            <option value="archived">المؤرشفة / Archived</option>
+            <option value="all">الكل / All</option>
+          </select>
+        </div>
+        <div id="freelanceProjectsGrid" class="grid grid-cols-1 lg:grid-cols-2 gap-4"></div>
+        <div id="projectsPagination" class="flex items-center justify-between pt-2 border-t border-slate-800 text-xs text-slate-400"></div>
       </div>
 
       <!-- Dynamic Custom Category Manager -->
@@ -996,7 +1042,66 @@
 
     </section>
 
-    <!-- MODULE 6: LOCAL DATABASE, BACKUP & DEMO RESET -->
+    <!-- MODULE 6: DEBTS, INSTALLMENTS & SAVINGS GOALS -->
+    <section id="tab-debts" class="tab-content hidden space-y-6">
+
+      <!-- Debts Summary KPIs -->
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="glass-card rounded-2xl p-4 border-l-4 border-l-rose-500">
+          <span class="text-xs text-slate-400 font-bold block" data-i18n="debt_owed_by_me">Debts Owed By You (-)</span>
+          <span class="text-2xl font-black text-rose-400 font-mono mt-1 block" id="totalOwedByMe">0.00</span>
+        </div>
+        <div class="glass-card rounded-2xl p-4 border-l-4 border-l-emerald-500">
+          <span class="text-xs text-slate-400 font-bold block" data-i18n="debt_owed_to_me">Receivables Owed To You (+)</span>
+          <span class="text-2xl font-black text-emerald-400 font-mono mt-1 block" id="totalOwedToMe">0.00</span>
+        </div>
+        <div class="glass-card rounded-2xl p-4 border-l-4 border-l-indigo-500">
+          <span class="text-xs text-slate-400 font-bold block" data-i18n="debt_net_impact">Net Liability Impact</span>
+          <span class="text-2xl font-black text-indigo-300 font-mono mt-1 block" id="netDebtImpact">0.00</span>
+        </div>
+      </div>
+
+      <!-- Debts & Installments Tracker -->
+      <div class="glass-card rounded-2xl p-5 space-y-4">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div>
+            <h3 class="font-bold text-white text-base flex items-center gap-2">
+              <i class="fa-solid fa-file-invoice-dollar text-rose-400"></i>
+              <span data-i18n="debts_title">Long-Term Debts & Installments Tracker</span>
+            </h3>
+            <p class="text-xs text-slate-400" data-i18n="debts_sub">Separate long-term loans and installments from daily expenses</p>
+          </div>
+          <button type="button" id="btnOpenAddDebt"
+            class="px-3.5 py-1.5 rounded-lg bg-rose-500 hover:bg-rose-600 text-white font-bold text-xs flex items-center gap-1.5 transition-colors shadow-md shadow-rose-500/20">
+            <i class="fa-solid fa-plus"></i>
+            <span data-i18n="btn_add_debt">Add Debt / Installment</span>
+          </button>
+        </div>
+        <div id="debtsList" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+      </div>
+
+      <!-- Savings Goals & Sinking Funds -->
+      <div class="glass-card rounded-2xl p-5 space-y-4">
+        <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+          <div>
+            <h3 class="font-bold text-white text-base flex items-center gap-2">
+              <i class="fa-solid fa-bullseye text-emerald-400"></i>
+              <span data-i18n="goals_title">Savings Goals & Sinking Funds</span>
+            </h3>
+            <p class="text-xs text-slate-400" data-i18n="goals_sub">Create financial targets and track completion progress</p>
+          </div>
+          <button type="button" id="btnOpenAddGoal"
+            class="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs flex items-center gap-1.5 transition-colors shadow-md shadow-emerald-500/20">
+            <i class="fa-solid fa-plus"></i>
+            <span data-i18n="btn_add_goal">New Savings Goal</span>
+          </button>
+        </div>
+        <div id="savingsGoalsGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div>
+      </div>
+
+    </section>
+
+    <!-- MODULE 7: LOCAL DATABASE, BACKUP & DEMO RESET -->
     <section id="tab-settings" class="tab-content hidden space-y-6">
 
       <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1053,6 +1158,34 @@
               </span>
               <i
                 class="fa-solid fa-chevron-left rtl:fa-chevron-left ltr:fa-chevron-right text-slate-500 group-hover:text-white transition-transform"></i>
+            </button>
+
+            <button type="button" id="btnExportEncrypted"
+              class="w-full py-2.5 px-4 rounded-xl bg-indigo-950/40 hover:bg-indigo-950/60 border border-indigo-500/40 text-indigo-200 font-bold text-xs flex items-center justify-between transition-all group">
+              <span class="flex items-center gap-2">
+                <i class="fa-solid fa-shield-halved text-indigo-400"></i>
+                <span data-i18n="btn_export_enc">Export Encrypted Backup (.PTW / AES-GCM)</span>
+              </span>
+              <i class="fa-solid fa-lock text-indigo-400"></i>
+            </button>
+
+            <label
+              class="w-full py-2.5 px-4 rounded-xl bg-indigo-950/20 hover:bg-indigo-950/40 border border-indigo-500/30 text-indigo-200 font-bold text-xs flex items-center justify-between cursor-pointer transition-all group">
+              <span class="flex items-center gap-2">
+                <i class="fa-solid fa-key text-amber-400"></i>
+                <span data-i18n="btn_restore_enc">Restore Encrypted Backup (.PTW)</span>
+              </span>
+              <input type="file" id="importEncryptedInput" accept=".ptw,.json" class="hidden">
+              <i class="fa-solid fa-unlock text-amber-400"></i>
+            </label>
+
+            <button type="button" id="btnOpenCsvImport"
+              class="w-full py-2.5 px-4 rounded-xl bg-emerald-950/30 hover:bg-emerald-950/50 border border-emerald-500/30 text-emerald-200 font-bold text-xs flex items-center justify-between transition-all group">
+              <span class="flex items-center gap-2">
+                <i class="fa-solid fa-file-import text-emerald-400"></i>
+                <span data-i18n="btn_import_csv">Smart Import from Excel (.CSV)</span>
+              </span>
+              <i class="fa-solid fa-wand-magic-sparkles text-emerald-400"></i>
             </button>
           </div>
         </div>
@@ -1425,6 +1558,15 @@
         </div>
 
         <div>
+          <label class="text-xs text-slate-400 block mb-1 font-semibold" data-i18n="label_tx_status">Payment Status:</label>
+          <select id="creatorTxStatusSelect"
+            class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700 focus:outline-none focus:border-brand-500">
+            <option value="paid" data-i18n="status_paid">Paid (Received)</option>
+            <option value="pending" data-i18n="status_pending">Pending (Receivable)</option>
+          </select>
+        </div>
+
+        <div>
           <label class="text-xs text-slate-400 block mb-1 font-semibold" data-i18n="modal_tx_title">Title /
             Details</label>
           <input type="text" id="creatorTxTitleInput" data-i18n-placeholder="placeholder_creator_tx"
@@ -1499,6 +1641,15 @@
             <select id="flTxCategorySelect"
               class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500"></select>
           </div>
+        </div>
+
+        <div>
+          <label class="text-xs text-slate-400 block mb-1 font-semibold" data-i18n="label_tx_status">Payment Status:</label>
+          <select id="flTxStatusSelect"
+            class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700 focus:outline-none focus:border-indigo-500">
+            <option value="paid" data-i18n="status_paid">Paid (Received)</option>
+            <option value="pending" data-i18n="status_pending">Pending (Receivable)</option>
+          </select>
         </div>
 
         <div>
@@ -1579,6 +1730,221 @@
             data-i18n="btn_save">Save Budget</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD / EDIT DEBT -->
+  <div id="debtModal" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-dark-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h3 id="debtModalTitle" class="font-bold text-white text-base" data-i18n="btn_add_debt">Add Debt / Installment</h3>
+        <button type="button" aria-label="Close dialog" class="close-modal text-slate-400 hover:text-white text-sm"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="debtForm" class="space-y-3">
+        <input type="hidden" id="debtEditId" value="">
+        <div>
+          <label class="text-xs text-slate-400 block mb-1 font-semibold">النوع / Direction</label>
+          <select id="debtDirectionSelect" class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+            <option value="owed_by_me" data-i18n="debt_owed_by_me">Debts Owed By You (-)</option>
+            <option value="owed_to_me" data-i18n="debt_owed_to_me">Receivables Owed To You (+)</option>
+          </select>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold" data-i18n="modal_tx_title">Title</label>
+            <input type="text" id="debtTitleInput" required class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">الجهة / Party</label>
+            <input type="text" id="debtPartyInput" class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">إجمالي المبلغ / Total</label>
+            <input type="number" step="any" min="0" id="debtTotalInput" required class="w-full bg-dark-950 text-white font-mono text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">المدفوع حالياً / Paid</label>
+            <input type="number" step="any" min="0" id="debtPaidInput" value="0" class="w-full bg-dark-950 text-white font-mono text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+        </div>
+        <div class="grid grid-cols-3 gap-2">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">إجمالي الأقساط</label>
+            <input type="number" min="1" id="debtTotalInstInput" value="1" class="w-full bg-dark-950 text-white font-mono text-xs px-2.5 py-2 rounded-lg border border-slate-700">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">الأقساط المدفوعة</label>
+            <input type="number" min="0" id="debtPaidInstInput" value="0" class="w-full bg-dark-950 text-white font-mono text-xs px-2.5 py-2 rounded-lg border border-slate-700">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">تاريخ الاستحقاق</label>
+            <input type="date" id="debtDueDateInput" class="w-full bg-dark-950 text-white text-xs px-2 py-2 rounded-lg border border-slate-700">
+          </div>
+        </div>
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" class="close-modal px-3.5 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold" data-i18n="btn_cancel">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-rose-500 hover:bg-rose-600 text-white text-xs font-bold" data-i18n="btn_save">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD / EDIT SAVINGS GOAL -->
+  <div id="goalModal" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-dark-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h3 id="goalModalTitle" class="font-bold text-white text-base" data-i18n="btn_add_goal">New Savings Goal</h3>
+        <button type="button" aria-label="Close dialog" class="close-modal text-slate-400 hover:text-white text-sm"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="goalForm" class="space-y-3">
+        <input type="hidden" id="goalEditId" value="">
+        <div>
+          <label class="text-xs text-slate-400 block mb-1 font-semibold" data-i18n="modal_tx_title">Goal Title</label>
+          <input type="text" id="goalTitleInput" required class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">المبلغ المستهدف / Target</label>
+            <input type="number" step="any" min="1" id="goalTargetInput" required class="w-full bg-dark-950 text-white font-mono text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">المدخر حالياً / Saved</label>
+            <input type="number" step="any" min="0" id="goalSavedInput" value="0" class="w-full bg-dark-950 text-white font-mono text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 block mb-1 font-semibold">التاريخ المستهدف / Target Date</label>
+          <input type="date" id="goalDateInput" class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+        </div>
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" class="close-modal px-3.5 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold" data-i18n="btn_cancel">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold" data-i18n="btn_save">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD / EDIT FREELANCE PROJECT -->
+  <div id="projectModal" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-dark-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h3 id="projectModalTitle" class="font-bold text-white text-base" data-i18n="btn_add_project">New Project</h3>
+        <button type="button" aria-label="Close dialog" class="close-modal text-slate-400 hover:text-white text-sm"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="projectForm" class="space-y-3">
+        <input type="hidden" id="projectEditId" value="">
+        <div>
+          <label class="text-xs text-slate-400 block mb-1 font-semibold">اسم المشروع / Project Title</label>
+          <input type="text" id="projectTitleInput" required class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+        </div>
+        <div>
+          <label class="text-xs text-slate-400 block mb-1 font-semibold">وصف المشروع والعميل / Description</label>
+          <input type="text" id="projectDescInput" class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+        </div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">السعر المتفق عليه / Agreed Price</label>
+            <input type="number" step="any" min="1" id="projectAgreedInput" required class="w-full bg-dark-950 text-white font-mono text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">عملة الاتفاق / Currency</label>
+            <select id="projectCurrencySelect" class="w-full bg-dark-950 text-white font-mono text-xs px-3 py-2 rounded-lg border border-slate-700">
+              <option value="BASE" id="projectCurrencyBaseOpt">Base</option>
+              <option value="USD">USD ($)</option>
+              <option value="EUR">EUR (€)</option>
+            </select>
+          </div>
+        </div>
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" class="close-modal px-3.5 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold" data-i18n="btn_cancel">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold" data-i18n="btn_save">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: ADD PAYMENT TO FREELANCE PROJECT -->
+  <div id="projectPaymentModal" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-dark-900 border border-slate-700 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl relative">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h3 class="font-bold text-white text-base">تسجيل دفعة مستلمة / Log Project Payment</h3>
+        <button type="button" aria-label="Close dialog" class="close-modal text-slate-400 hover:text-white text-sm"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <form id="projectPaymentForm" class="space-y-3">
+        <input type="hidden" id="pmtProjectId" value="">
+        <div id="pmtProjectSummary" class="text-xs bg-dark-950 p-2.5 rounded-lg border border-slate-800 text-slate-300 font-mono"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">المبلغ المستلم / Received Amount</label>
+            <input type="number" step="any" min="0.01" id="pmtAmountInput" required class="w-full bg-dark-950 text-white font-mono text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">عملة الاستلام / Currency</label>
+            <select id="pmtCurrencySelect" class="w-full bg-dark-950 text-white font-mono text-xs px-3 py-2 rounded-lg border border-slate-700">
+              <option value="BASE" id="pmtCurrencyBaseOpt">Base</option>
+              <option value="USD">USD ($)</option>
+              <option value="EUR">EUR (€)</option>
+            </select>
+          </div>
+        </div>
+        <div id="pmtRatePreview" class="text-[11px] font-mono text-brand-300 bg-dark-950/60 p-2 rounded border border-slate-800 hidden"></div>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">تاريخ الاستلام / Date</label>
+            <input type="date" id="pmtDateInput" required class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+          <div>
+            <label class="text-xs text-slate-400 block mb-1 font-semibold">ملاحظة / Note</label>
+            <input type="text" id="pmtNoteInput" placeholder="مثال: دفعة مقدمة" class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+          </div>
+        </div>
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" class="close-modal px-3.5 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold" data-i18n="btn_cancel">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-brand-500 hover:bg-brand-600 text-white text-xs font-bold" data-i18n="btn_save">Save Payment</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: PASSWORD PROMPT FOR AES-GCM ENCRYPTED BACKUP -->
+  <div id="passwordPromptModal" class="fixed inset-0 z-[115] bg-black/80 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-dark-900 border border-indigo-500/40 rounded-2xl max-w-sm w-full p-6 space-y-4 shadow-2xl">
+      <h3 id="pwdModalTitle" class="font-bold text-white text-base">Encrypted Backup Password</h3>
+      <p id="pwdModalDesc" class="text-xs text-slate-400">Enter a strong password to encrypt/decrypt your backup via AES-GCM.</p>
+      <form id="pwdPromptForm" class="space-y-3">
+        <input type="password" id="pwdPromptInput" required placeholder="••••••••" class="w-full bg-dark-950 text-white text-xs px-3 py-2 rounded-lg border border-slate-700">
+        <div class="flex justify-end gap-2">
+          <button type="button" id="btnPwdCancel" class="px-3.5 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold" data-i18n="btn_cancel">Cancel</button>
+          <button type="submit" class="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold" data-i18n="btn_confirm">Confirm</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MODAL: SMART CSV IMPORT WIZARD -->
+  <div id="csvImportModal" class="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm hidden flex items-center justify-center p-4">
+    <div class="bg-dark-900 border border-slate-700 rounded-2xl max-w-lg w-full p-6 space-y-4 shadow-2xl relative">
+      <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+        <h3 class="font-bold text-white text-base" data-i18n="csv_import_title">Smart CSV Import Wizard</h3>
+        <button type="button" aria-label="Close dialog" class="close-modal text-slate-400 hover:text-white text-sm"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <input type="file" id="csvFileInput" accept=".csv" class="w-full bg-dark-950 text-slate-300 p-2 rounded-lg border border-slate-700">
+        <div id="csvPreviewBox" class="hidden space-y-2">
+          <div class="grid grid-cols-3 gap-2">
+            <div><label class="text-[10px] text-slate-400 block">عمود الوصف / Title</label><select id="csvColTitle" class="w-full bg-dark-950 text-white p-1.5 rounded border border-slate-700"></select></div>
+            <div><label class="text-[10px] text-slate-400 block">عمود المبلغ / Amount</label><select id="csvColAmount" class="w-full bg-dark-950 text-white p-1.5 rounded border border-slate-700"></select></div>
+            <div><label class="text-[10px] text-slate-400 block">عمود التاريخ / Date</label><select id="csvColDate" class="w-full bg-dark-950 text-white p-1.5 rounded border border-slate-700"></select></div>
+          </div>
+          <p id="csvRowsInfo" class="text-[11px] text-emerald-400 font-mono"></p>
+        </div>
+        <div class="pt-2 flex justify-end gap-2">
+          <button type="button" class="close-modal px-3.5 py-2 rounded-lg bg-slate-800 text-slate-300 text-xs font-bold" data-i18n="btn_cancel">Cancel</button>
+          <button type="button" id="btnConfirmCsvImport" class="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold disabled:opacity-40" disabled data-i18n="btn_confirm">Import</button>
+        </div>
+      </div>
     </div>
   </div>
 
